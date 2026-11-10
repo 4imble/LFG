@@ -1,0 +1,21 @@
+{
+  "name": "lfg",
+  "version": "1.0.0",
+  "description": "LFG: a shared, AI-assisted trip planner",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  }
+}
