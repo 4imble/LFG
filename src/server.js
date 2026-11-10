@@ -1,6 +1,8 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { openDb } from './db.js';
 import { makeAuth, hashPassword } from './auth.js';
 import { applyOp, applyOps, OpError } from './ops.js';
@@ -200,8 +202,18 @@ export function createApp({ db, password, secret }) {
     }
   });
 
-  app.use(express.static(join(root, 'public'), { index: 'index.html', maxAge: '1h' }));
-  app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(join(root, 'public', 'index.html')));
+  // The page links its JS/CSS with a hash of their contents (?v=...), so any
+  // cache in front of the app (browser, CDN, proxy) fetches new files after a
+  // deploy. The page itself is never cached.
+  const pub = join(root, 'public');
+  const stamp = (f) => createHash('sha1').update(readFileSync(join(pub, f))).digest('hex').slice(0, 10);
+  const indexHtml = readFileSync(join(pub, 'index.html'), 'utf8')
+    .replace('href="/styles.css"', `href="/styles.css?v=${stamp('styles.css')}"`)
+    .replace('src="/app.js"', `src="/app.js?v=${stamp('app.js')}"`);
+  const sendIndex = (_req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
+  app.get(['/', '/index.html'], sendIndex);
+  app.use(express.static(pub, { index: false, maxAge: 0 }));
+  app.get(/^\/(?!api\/).*/, sendIndex);
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
