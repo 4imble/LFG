@@ -200,7 +200,8 @@ export function createApp({ db, password, secret }) {
     }
   });
 
-  app.use(express.static(join(root, 'public'), { index: 'index.html', maxAge: '1h' }));
+  // maxAge 0: browsers revalidate (cheap 304s via ETag) so a redeploy shows up on the next reload.
+  app.use(express.static(join(root, 'public'), { index: 'index.html', maxAge: 0 }));
   app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(join(root, 'public', 'index.html')));
 
   // eslint-disable-next-line no-unused-vars
