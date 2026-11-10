@@ -16,7 +16,6 @@ const state = {
   plan: null,        // { id, version, doc }
   chat: [],
   chatOpen: false,
-  chatHidden: (() => { try { return localStorage.getItem('lfg_chat_hidden') === '1'; } catch { return false; } })(),
   thinking: false,
   filter: 'all',
   history: null,
@@ -129,7 +128,7 @@ function route() {
   return { view: 'home' };
 }
 const go = (hash) => { if (location.hash !== hash) location.hash = hash; else render(); };
-window.addEventListener('hashchange', () => { state.filter = 'all'; render(); });
+window.addEventListener('hashchange', () => { state.filter = 'all'; if (state.chatOpen) setChatOpen(false); render(); });
 
 async function render() {
   const r = route();
@@ -326,15 +325,15 @@ function renderPlan(r) {
             ${countdown}
           </div>
         </div>
-        <button class="btn sm" data-action="edit-plan">Edit details</button>
+        <div style="display:flex;gap:8px">
+          ${state.ai ? '<button class="btn primary sm" data-action="toggle-chat">✨ Assistant</button>' : ''}
+          <button class="btn sm" data-action="edit-plan">Edit details</button>
+        </div>
       </div>
       <nav class="tabs">${tabs}</nav>
-      <div class="layout ${state.ai && !state.chatHidden ? 'with-chat' : ''} ${state.ai && state.chatHidden ? 'chat-hidden' : ''}">
-        <div>${body}</div>
-        ${state.ai ? chatPanel() : ''}
-      </div>
+      <div>${body}</div>
     </main>
-    ${state.ai ? `<button class="btn primary chat-fab ${state.chatHidden ? 'desktop' : ''}" data-action="toggle-chat">✨ Ask / dump</button>` : ''}`;
+    ${state.ai ? `<button class="btn primary chat-fab" data-action="toggle-chat">✨ Ask / dump</button>${chatPanel()}` : ''}`;
   const log = document.querySelector('.chat-log');
   if (log) log.scrollTop = log.scrollHeight;
 }
@@ -627,8 +626,8 @@ function chatPanel() {
   const msgs = state.chat.map((m) => m.role === 'user'
     ? `<div class="msg user"><div class="who">${esc(m.author)}</div>${esc(m.text)}</div>`
     : `<div class="msg assistant">${md(m.text)}${m.version ? `<div class="small"><a href="#/p/${state.plan.id}/history/${m.version}">See changes (v${m.version})</a></div>` : ''}</div>`).join('');
-  return `<aside class="chat ${state.chatOpen ? 'open' : ''}">
-    <div class="chat-head"><h3>✨ Assistant</h3><button class="icon-btn chat-close" data-action="toggle-chat" title="Hide the assistant">✕</button></div>
+  return `<div class="chat-back ${state.chatOpen ? 'open' : ''}"><aside class="chat" role="dialog" aria-modal="true" aria-label="Assistant">
+    <div class="chat-head"><h3>✨ Assistant</h3><span class="small muted">${esc(state.plan.doc.title)}</span><button class="icon-btn chat-close" data-action="toggle-chat" title="Close">✕</button></div>
     <div class="chat-log">
       ${msgs || `<div class="muted small">Tell me anything about this trip and I'll file it in the right place, make new tabs when needed, update prices, or answer questions about the plan.</div>
         <div class="chat-hints">${hints.map((h) => `<button class="hint" data-action="hint">${esc(h)}</button>`).join('')}</div>`}
@@ -638,7 +637,7 @@ function chatPanel() {
       <textarea name="message" placeholder="Dump ideas, paste links, ask for changes…" ${state.thinking ? 'disabled' : ''}>${esc(state.draft || '')}</textarea>
       <div class="row"><span class="small muted">⌘/Ctrl + Enter to send</span><button class="btn primary sm" ${state.thinking ? 'disabled' : ''}>Send</button></div>
     </form>
-  </aside>`;
+  </aside></div>`;
 }
 
 async function sendChat(message) {
@@ -673,7 +672,24 @@ function openModal(html, onMount) {
   $modal.querySelector('form input, form textarea')?.focus();
 }
 const closeModal = () => { $modal.innerHTML = ''; };
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $modal.innerHTML) closeModal(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if ($modal.innerHTML) closeModal();
+  else if (state.chatOpen) setChatOpen(false);
+});
+
+// The assistant opens as a modal over the plan.
+function setChatOpen(open) {
+  state.chatOpen = open;
+  const back = document.querySelector('.chat-back');
+  back?.classList.toggle('open', open);
+  document.body.classList.toggle('no-scroll', open);
+  if (open) {
+    const log = document.querySelector('.chat-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    document.querySelector('.chat-form textarea')?.focus();
+  }
+}
 
 async function saveOps(ops, summary) {
   try {
@@ -928,6 +944,7 @@ function rerender() {
 }
 
 document.addEventListener('click', async (e) => {
+  if (e.target.classList?.contains('chat-back')) return setChatOpen(false);
   const el = e.target.closest('[data-action], [data-item], [data-version]');
   if (!el || e.target.closest('[data-stop]') || el.closest('#modal-root')) return;
   const a = el.dataset.action;
@@ -966,16 +983,7 @@ document.addEventListener('click', async (e) => {
     case 'add-item': return itemEditor({ tabId: el.dataset.tab });
     case 'edit-plan': return planEditor();
     case 'filter': state.filter = el.dataset.filter; return rerender();
-    case 'toggle-chat':
-      if (matchMedia('(max-width: 960px)').matches) {
-        state.chatOpen = !state.chatOpen;
-        document.querySelector('.chat')?.classList.toggle('open', state.chatOpen);
-        return undefined;
-      }
-      // On desktop, closing the panel gives its width back to the plan.
-      state.chatHidden = !state.chatHidden;
-      try { localStorage.setItem('lfg_chat_hidden', state.chatHidden ? '1' : ''); } catch { /* ignore */ }
-      return rerender();
+    case 'toggle-chat': return setChatOpen(!state.chatOpen);
     case 'hint': {
       const ta = document.querySelector('.chat-form textarea');
       ta.value = el.textContent.replace(/…$/, ''); ta.focus(); return undefined;
