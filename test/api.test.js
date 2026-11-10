@@ -93,4 +93,35 @@ test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) 
 
   const list = (await call('/plans')).body;
   assert.equal(list.length, 1);
+  assert.equal(list[0].hasPassword, false);
+  assert.equal(list[0].password_hash, undefined);
+
+  // Per-plan passwords: a plan password unlocks only that plan.
+  const other = (await call('/plans', { name: 'Friends holiday' })).body;
+  assert.equal((await call(`/plans/${plan.id}/password`, { password: 'abc' })).status, 400);
+  assert.equal((await call(`/plans/${plan.id}/password`, { password: 'sabbatical!' })).status, 200);
+  const admin = cookie;
+
+  cookie = '';
+  assert.equal((await call('/login', { password: 'wrong-one' })).status, 401);
+  const guest = await call('/login', { password: 'sabbatical!' });
+  assert.equal(guest.status, 200);
+  assert.equal(guest.body.admin, false);
+  cookie = guest.res.headers.get('set-cookie').split(';')[0];
+  assert.deepEqual((await call('/plans')).body.map((p) => p.id), [plan.id]);
+  assert.equal((await call(`/plans/${plan.id}`)).status, 200);
+  assert.equal((await call(`/plans/${plan.id}/ops`, { ops: [{ type: 'set_plan_details', subtitle: 'by guest' }] })).status, 200);
+  const locked = await call(`/plans/${other.id}`);
+  assert.equal(locked.status, 403);
+  assert.equal(locked.body.locked, true);
+  assert.equal((await call(`/plans/${other.id}/versions`)).status, 403);
+  assert.equal((await call('/plans', { name: 'Sneaky' })).status, 403);
+  assert.equal((await call(`/plans/${plan.id}/password`, { password: 'hijacked' })).status, 403);
+  const guestCookie = cookie;
+
+  // Resetting the password signs the guest out of that plan.
+  cookie = admin;
+  await call(`/plans/${plan.id}/password`, { password: 'new-secret' });
+  cookie = guestCookie;
+  assert.equal((await call(`/plans/${plan.id}`)).status, 403);
 });

@@ -11,7 +11,7 @@ A shared, AI-assisted trip planner. Each trip is a **plan** (a sabbatical, a hol
 - **Overview**: booked and shortlisted totals, status breakdown, countries, pinned items, and an itinerary across every tab.
 - **Assistant** (Claude): paste a brain dump or ask for changes ("the Tokyo flight is now £540", "tidy the inbox into tabs") and it edits the plan through the same validated operations as the UI. It can search the web when you ask it to look something up.
 - **History**: every change (manual, assistant or restore) is a version showing who made it and what changed. You can preview any old version and restore it.
-- **One shared password**: anyone with the link and password can edit. People give a display name so changes are attributed.
+- **Per-plan passwords**: `APP_PASSWORD` is the admin password. It opens the admin page, where you can see every plan, create plans, set or reset each plan's password and copy its share link. A plan's own password opens only that plan, and anyone holding it can edit that plan. Resetting a plan's password signs out everyone who used the old one. A new plan has no password, so only the admin can open it until you set one. People give a display name so changes are attributed.
 - Picks up changes from other people every 20 seconds, and works on phones.
 
 ## Running on Coolify
@@ -20,7 +20,7 @@ A shared, AI-assisted trip planner. Each trip is a **plan** (a sabbatical, a hol
 2. Add this repo as an application using the **Dockerfile** build pack. The port is `3000`.
 3. Set these environment variables:
    - `DATABASE_URL`: the Postgres URL from step 1.
-   - `APP_PASSWORD`: the shared password.
+   - `APP_PASSWORD`: the admin password. Plan passwords are set on the admin page.
    - `ANTHROPIC_API_KEY`: turns on the assistant (optional).
 4. Deploy. On startup the app runs any pending database migrations against `DATABASE_URL` (tracked in a `schema_migrations` table), so new versions upgrade the schema themselves.
 

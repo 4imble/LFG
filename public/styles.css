@@ -305,3 +305,14 @@ th.num, td.num { text-align: right; }
   .cards { grid-template-columns: 1fr; }
   .tl-date { min-width: 70px; }
 }
+
+/* Admin */
+.admin-list { display: grid; gap: 10px; margin-top: 18px; }
+.admin-row { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; display: grid; grid-template-columns: minmax(200px, 1.2fr) minmax(240px, 1.4fr) auto; gap: 14px; align-items: center; }
+.admin-row.archived { opacity: .6; }
+.admin-plan { display: flex; gap: 12px; align-items: center; text-decoration: none; color: inherit; }
+.admin-plan .emoji { font-size: 28px; }
+.admin-pw { display: grid; gap: 4px; }
+.admin-pw input { padding: 5px 9px; font-size: 14px; }
+.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 860px) { .admin-row { grid-template-columns: 1fr; } .admin-actions { justify-content: flex-start; } }
