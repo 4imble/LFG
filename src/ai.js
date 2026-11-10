@@ -5,8 +5,18 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { applyOp, OpError, ITEM_KINDS, STATUSES, LAYOUTS } from './ops.js';
 
-const MODEL = process.env.AI_MODEL || 'claude-opus-5-5';
-const EFFORT = process.env.AI_EFFORT || 'medium';
+// Models offered on the admin page. Prices are per million input/output tokens.
+export const MODELS = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', note: 'Recommended: smart and well priced ($4 / $20)', fallback: true, webSearch: 'web_search_20260209' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', note: 'Faster and cheaper ($2 / $10)', fallback: true, webSearch: 'web_search_20260209' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', note: 'Fastest and cheapest, best for simple edits ($0.10 / $0.50)', fallback: false, webSearch: 'web_search_20250305' },
+  { id: 'claude-fable-5-2', label: 'Claude Fable 5.2', note: 'Most capable, slowest and priciest ($8 / $40)', fallback: true, webSearch: 'web_search_20260209' },
+];
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+export const DEFAULT_SETTINGS = {
+  model: process.env.AI_MODEL || 'claude-opus-5-5',
+  effort: process.env.AI_EFFORT || 'medium',
+};
 const MAX_STEPS = 30;
 
 let client = null;
@@ -144,7 +154,6 @@ const tools = [
     description: 'Delete an item. Only do this when asked, or when merging a duplicate into another item.',
     input_schema: { type: 'object', properties: { item_id: { type: 'string' } }, required: ['item_id'] },
   },
-  { type: 'web_search_20260209', name: 'web_search', max_uses: 5 },
 ];
 
 const SYSTEM = `You are the planning assistant inside "LFG", a shared trip-planning web app. A small group (often a couple, sometimes friends) dumps thoughts into a plan over many months: flights with links and prices, countries and cities they might visit, things to do, places to stay, budgets, admin. Your job is to keep each plan beautifully organised so it is a pleasure to read.
@@ -183,7 +192,12 @@ function toHistory(chat) {
 // Runs the assistant. Returns { reply, ops, results } where ops are the
 // successful operations (so the server can replay them if the plan changed
 // while the assistant was thinking).
-export async function runAssistant({ doc, message, author, chat = [], today = new Date() }) {
+export async function runAssistant({ doc, message, author, chat = [], today = new Date(), settings = DEFAULT_SETTINGS }) {
+  const model = MODELS.find((m) => m.id === settings.model) || MODELS[0];
+  const effort = EFFORTS.includes(settings.effort) ? settings.effort : DEFAULT_SETTINGS.effort;
+  const requestTools = [...tools, { type: model.webSearch, name: 'web_search', max_uses: 5 }];
+  // Server-side refusal fallback is only offered on some models.
+  const fallback = model.fallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {};
   const draft = structuredClone(doc);
   const applied = [];
   const results = [];
@@ -198,14 +212,13 @@ export async function runAssistant({ doc, message, author, chat = [], today = ne
   let reply = '';
   for (let step = 0; step < MAX_STEPS; step++) {
     const response = await getClient().beta.messages.create({
-      model: MODEL,
+      model: model.id,
       max_tokens: 16000,
       system: SYSTEM,
-      tools,
+      tools: requestTools,
       thinking: { type: 'adaptive' },
-      output_config: { effort: EFFORT },
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      output_config: { effort },
+      ...fallback,
       cache_control: { type: 'ephemeral' },
       messages,
     });

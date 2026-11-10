@@ -125,7 +125,7 @@ async function render() {
   try {
     if (r.view === 'admin') {
       if (!state.admin) return go('#/');
-      state.plans = await api('/plans');
+      [state.plans, state.aiSettings] = await Promise.all([api('/plans'), api('/settings/assistant')]);
       return renderAdmin();
     }
     if (r.view === 'home') {
@@ -239,8 +239,47 @@ function renderAdmin() {
         <button class="btn primary" data-action="new-plan">＋ New plan</button>
       </section>
       <div class="admin-list">${state.plans.length ? state.plans.map(row).join('') : '<div class="empty">No plans yet. Create the first one.</div>'}</div>
+      ${assistantSettings()}
     </main>`;
 }
+
+function assistantSettings() {
+  const a = state.aiSettings;
+  if (!a) return '';
+  const effortNotes = { low: 'Quick, cheapest', medium: 'Balanced (default)', high: 'Thinks harder', xhigh: 'Thinks hardest, slowest' };
+  return `<h2 class="section-title">✨ Assistant</h2>
+    <form class="summary-box" id="ai-settings" style="display:grid;gap:14px">
+      ${a.enabled ? '' : '<div class="banner" style="margin:0">The assistant is off because <code>ANTHROPIC_API_KEY</code> isn\'t set. You can still choose these settings now.</div>'}
+      <div class="grid-2">
+        <label class="field">Model
+          <select name="model">${a.models.map((m) => `<option value="${esc(m.id)}" ${m.id === a.model ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}</select>
+          <span class="small muted" style="font-weight:400" id="model-note">${esc(a.models.find((m) => m.id === a.model)?.note || '')}</span>
+        </label>
+        <label class="field">Effort
+          <select name="effort">${a.efforts.map((e) => `<option value="${e}" ${e === a.effort ? 'selected' : ''}>${e} · ${effortNotes[e] || ''}</option>`).join('')}</select>
+          <span class="small muted" style="font-weight:400">Higher effort gives better reorganising and research, but replies take longer and cost more.</span>
+        </label>
+      </div>
+      <div class="small muted">Prices are per million tokens (input / output). A typical request costs pennies on Opus or Sonnet. These settings apply to every plan.</div>
+      <div><button class="btn primary sm">Save assistant settings</button></div>
+    </form>`;
+}
+
+document.addEventListener('submit', async (e) => {
+  if (e.target.id !== 'ai-settings') return;
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const r = await api('/settings/assistant', { body: f });
+    Object.assign(state.aiSettings, r);
+    toast(`Assistant now uses ${state.aiSettings.models.find((m) => m.id === r.model)?.label} at ${r.effort} effort`);
+  } catch (err) { toast(`⚠️ ${err.message}`); }
+});
+document.addEventListener('change', (e) => {
+  if (e.target.closest('#ai-settings') && e.target.name === 'model') {
+    document.getElementById('model-note').textContent = state.aiSettings.models.find((m) => m.id === e.target.value)?.note || '';
+  }
+});
 
 // ---------- plan ----------
 function renderPlan(r) {
