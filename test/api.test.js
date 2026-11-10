@@ -15,12 +15,14 @@ test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) 
 
   // Fake Messages API: first call adds a tab, second replies with text.
   let calls = 0;
+  const seen = [];
   const fake = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       calls++;
       const reqBody = JSON.parse(body);
+      seen.push(reqBody);
       const toolUse = calls === 1;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({
@@ -73,7 +75,16 @@ test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) 
   const bad = await call(`/plans/${plan.id}/ops`, { ops: [{ type: 'delete_item', item_id: 'item_nope' }] });
   assert.equal(bad.status, 400);
 
+  assert.equal((await call('/settings/assistant', { model: 'gpt-9', effort: 'low' })).status, 400);
+  const saved = await call('/settings/assistant', { model: 'claude-haiku-5-5', effort: 'low' });
+  assert.equal(saved.status, 200);
+  assert.equal((await call('/settings/assistant')).body.model, 'claude-haiku-5-5');
+
   const ai = await call(`/plans/${plan.id}/ai`, { message: 'make a flights tab' });
+  assert.equal(seen[0].model, 'claude-haiku-5-5');
+  assert.equal(seen[0].output_config.effort, 'low');
+  assert.equal(seen[0].fallbacks, undefined);
+  assert.ok(seen[0].tools.some((tl) => tl.type === 'web_search_20250305'));
   assert.equal(ai.status, 200, JSON.stringify(ai.body));
   assert.equal(ai.body.reply, 'Added a Flights tab.');
   assert.equal(ai.body.version, 3);
@@ -116,6 +127,7 @@ test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) 
   assert.equal(locked.body.locked, true);
   assert.equal((await call(`/plans/${other.id}/versions`)).status, 403);
   assert.equal((await call('/plans', { name: 'Sneaky' })).status, 403);
+  assert.equal((await call('/settings/assistant')).status, 403);
   assert.equal((await call(`/plans/${plan.id}/password`, { password: 'hijacked' })).status, 403);
   const guestCookie = cookie;
 
