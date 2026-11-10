@@ -1,0 +1,10 @@
+{
+  "name": "LFG trip planner",
+  "short_name": "LFG",
+  "description": "A shared, AI-assisted trip planner",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3ec",
+  "theme_color": "#17665f",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
