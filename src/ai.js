@@ -192,7 +192,8 @@ function toHistory(chat) {
 // Runs the assistant. Returns { reply, ops, results } where ops are the
 // successful operations (so the server can replay them if the plan changed
 // while the assistant was thinking).
-export async function runAssistant({ doc, message, author, chat = [], today = new Date(), settings = DEFAULT_SETTINGS }) {
+// onProgress(text) is called as it works, for showing live progress.
+export async function runAssistant({ doc, message, author, chat = [], today = new Date(), settings = DEFAULT_SETTINGS, onProgress = () => {} }) {
   const model = MODELS.find((m) => m.id === settings.model) || MODELS[0];
   const effort = EFFORTS.includes(settings.effort) ? settings.effort : DEFAULT_SETTINGS.effort;
   const requestTools = [...tools, { type: model.webSearch, name: 'web_search', max_uses: 5 }];
@@ -231,6 +232,11 @@ export async function runAssistant({ doc, message, author, chat = [], today = ne
     const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
     if (text) reply = text;
     messages.push({ role: 'assistant', content: response.content });
+    for (const block of response.content) {
+      if (block.type === 'server_tool_use' && block.name === 'web_search') {
+        onProgress(`Searched the web${block.input?.query ? ` for “${String(block.input.query).slice(0, 80)}”` : ''}`);
+      }
+    }
 
     if (response.stop_reason === 'pause_turn') continue;
     if (response.stop_reason !== 'tool_use') break;
@@ -243,6 +249,7 @@ export async function runAssistant({ doc, message, author, chat = [], today = ne
       try {
         if (block.name === 'view_plan') {
           content = JSON.stringify(draft);
+          onProgress('Read the plan');
         } else {
           const op = { type: block.name, ...(block.input || {}) };
           const res = applyOp(draft, op, { author: `AI (for ${author || 'planner'})` });
@@ -251,6 +258,7 @@ export async function runAssistant({ doc, message, author, chat = [], today = ne
           if (res.id && op.type === 'add_item') op.__id = res.id;
           applied.push(op);
           results.push(res.text);
+          onProgress(res.text);
           content = res.id ? `${res.text} (id: ${res.id})` : res.text;
         }
       } catch (err) {

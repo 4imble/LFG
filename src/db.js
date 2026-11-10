@@ -137,6 +137,9 @@ export async function openDb(connectionString) {
       await pool.query(`INSERT INTO settings (key, value) VALUES ($1, $2)
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [key, JSON.stringify(value)]);
     },
+    async deletePlan(id) {
+      await pool.query('DELETE FROM plans WHERE id = $1', [id]);
+    },
     async setArchived(id, archived) {
       await pool.query('UPDATE plans SET archived = $1 WHERE id = $2', [archived, id]);
     },

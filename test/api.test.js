@@ -136,4 +136,49 @@ test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) 
   await call(`/plans/${plan.id}/password`, { password: 'new-secret' });
   cookie = guestCookie;
   assert.equal((await call(`/plans/${plan.id}`)).status, 403);
+
+  // Undo: a restore with ifVersion is refused once the plan has moved on.
+  cookie = admin;
+  const current = (await call(`/plans/${plan.id}`)).body.version;
+  const stale = await call(`/plans/${plan.id}/versions/1/restore`, { ifVersion: current - 1 });
+  assert.equal(stale.status, 409);
+  assert.equal((await call(`/plans/${plan.id}/versions/1/restore`, { ifVersion: current })).body.version, current + 1);
+  assert.equal((await call(`/plans/${plan.id}/versions/abc`)).status, 404);
+
+  // The assistant can stream its progress as newline-delimited JSON.
+  calls = 0;
+  const streamed = await fetch(`${base}/plans/${plan.id}/ai`, {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ message: 'flights tab please', stream: true }),
+  });
+  assert.match(streamed.headers.get('content-type'), /ndjson/);
+  const events = (await streamed.text()).trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(events.map((e) => e.type), ['start', 'step', 'done']);
+  assert.equal(events[1].text, 'Added tab “Flights”');
+  assert.equal(events[2].savedVersion, events[2].version);
+  assert.ok(events[2].doc.tabs.some((tb) => tb.title === 'Flights'));
+
+  // Deleting a plan is admin only and needs its exact name.
+  cookie = guestCookie;
+  const del = (path, body) => fetch(base + path, { method: 'DELETE', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
+  assert.equal((await del(`/plans/${other.id}`, { confirm: 'Friends holiday' })).status, 403);
+  cookie = admin;
+  assert.equal((await del(`/plans/${other.id}`, { confirm: 'friends' })).status, 400);
+  assert.equal((await del(`/plans/${other.id}`, { confirm: 'Friends holiday' })).status, 200);
+  assert.deepEqual((await call('/plans')).body.map((p) => p.id), [plan.id]);
+
+  // The page links its assets under a per-build path, which can be cached
+  // for ever; the page itself is always revalidated.
+  const origin = base.replace('/api', '');
+  const page = await fetch(origin);
+  assert.equal(page.headers.get('cache-control'), 'no-cache');
+  assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
+  const html = await page.text();
+  const [, asset] = html.match(/src="(\/v\/[0-9a-f]+\/app\.js)"/);
+  assert.match(html, /href="\/v\/[0-9a-f]+\/styles\.css"/);
+  const js = await fetch(origin + asset);
+  assert.equal(js.status, 200);
+  assert.match(js.headers.get('cache-control'), /immutable/);
+  assert.equal((await fetch(`${origin}/v/oldbuild/lib/format.js`)).status, 200);
+  assert.equal((await fetch(`${origin}/api/nope`, { headers: { cookie } })).status, 404);
+  assert.match((await (await fetch(`${origin}/some/deep/link`)).text()), /<div id="app">/);
 });

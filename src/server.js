@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { openDb } from './db.js';
 import { makeAuth, hashPassword } from './auth.js';
@@ -9,12 +9,47 @@ import { applyOp, applyOps, OpError } from './ops.js';
 import { aiEnabled, runAssistant, MODELS, EFFORTS, DEFAULT_SETTINGS } from './ai.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const MAX_OPS = 500;
+
+// The browser may only load scripts and styles from this app (plus Google
+// Fonts), so text that ends up in a plan can never run as code.
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob: https: http:", "connect-src 'self'",
+  "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'", "object-src 'none'",
+].join('; ');
+
+// A hash of everything in public/. It goes into asset URLs, so a deploy that
+// changes any file changes every URL.
+function buildId(dir) {
+  const hash = createHash('sha1');
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else hash.update(relative(dir, full)).update(readFileSync(full));
+    }
+  };
+  walk(dir);
+  return hash.digest('hex').slice(0, 10);
+}
 
 export function createApp({ db, password, secret }) {
   const app = express();
   const auth = makeAuth({ password, secret });
   app.set('trust proxy', true);
+  app.disable('x-powered-by');
   app.use(express.json({ limit: '2mb' }));
+  app.use((_req, res, next) => {
+    res.set({
+      'Content-Security-Policy': CSP,
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'same-origin',
+      'X-Frame-Options': 'DENY',
+    });
+    next();
+  });
+  app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
   const who = (req) => {
     let n = String(req.get('x-lfg-name') || '');
@@ -104,11 +139,22 @@ export function createApp({ db, password, secret }) {
     res.json({ ok: true });
   });
 
+  // Deleting is permanent (history and chat go too), so the caller has to
+  // repeat the plan's title.
+  app.delete('/api/plans/:id', adminOnly, async (req, res) => {
+    const plan = await loadPlan(req, res);
+    if (!plan) return;
+    if (String(req.body?.confirm ?? '').trim() !== plan.doc.title.trim()) return res.status(400).json({ error: 'Type the plan\'s name exactly to delete it' });
+    await db.deletePlan(plan.id);
+    res.json({ ok: true });
+  });
+
   // Apply manual edits. Edits are applied to the latest saved plan, so two
   // people editing different things at once both keep their changes.
   app.post('/api/plans/:id/ops', async (req, res) => {
     const ops = Array.isArray(req.body?.ops) ? req.body.ops : [];
     if (!ops.length) return res.status(400).json({ error: 'No changes' });
+    if (ops.length > MAX_OPS) return res.status(400).json({ error: 'Too many changes at once' });
     for (let attempt = 0; attempt < 3; attempt++) {
       const plan = await loadPlan(req, res);
       if (!plan) return;
@@ -129,8 +175,8 @@ export function createApp({ db, password, secret }) {
   app.get('/api/plans/:id/versions', async (req, res) => {
     const plan = await loadPlan(req, res);
     if (!plan) return;
-    const limit = Math.min(Number(req.query.limit) || 100, 500);
-    const offset = Number(req.query.offset) || 0;
+    const limit = Math.min(Math.max(Math.trunc(Number(req.query.limit)) || 100, 1), 500);
+    const offset = Math.max(Math.trunc(Number(req.query.offset)) || 0, 0);
     res.json({ current: plan.version, versions: await db.listVersions(plan.id, limit, offset) });
   });
 
@@ -138,6 +184,7 @@ export function createApp({ db, password, secret }) {
     const plan = await loadPlan(req, res);
     if (!plan) return;
     const n = Number(req.params.n);
+    if (!Number.isInteger(n)) return res.status(404).json({ error: 'No such version' });
     const v = await db.getVersion(plan.id, n);
     if (!v) return res.status(404).json({ error: 'No such version' });
     const prev = n > 1 ? await db.getVersion(plan.id, n - 1) : null;
@@ -147,8 +194,12 @@ export function createApp({ db, password, secret }) {
   app.post('/api/plans/:id/versions/:n/restore', async (req, res) => {
     const plan = await loadPlan(req, res);
     if (!plan) return;
-    const v = await db.getVersion(plan.id, Number(req.params.n));
+    const n = Number(req.params.n);
+    const v = Number.isInteger(n) ? await db.getVersion(plan.id, n) : null;
     if (!v) return res.status(404).json({ error: 'No such version' });
+    // Undo passes ifVersion so it never wipes out an edit made in the meantime.
+    const ifVersion = req.body?.ifVersion;
+    if (ifVersion != null && Number(ifVersion) !== plan.version) return res.status(409).json({ error: 'The plan has changed since then. Use History to restore instead.' });
     const version = await db.savePlan(plan.id, plan.version, v.doc, {
       author: who(req), source: 'restore', summary: `Restored version ${v.n}`,
     });
@@ -161,6 +212,9 @@ export function createApp({ db, password, secret }) {
     if (plan) res.json(await db.listChat(plan.id));
   });
 
+  // One assistant run per plan at a time. With { stream: true } the reply is
+  // newline-delimited JSON: "step" lines while it works (which also keep slow
+  // proxies from timing out), then one "done" or "error" line.
   const running = new Set();
   app.post('/api/plans/:id/ai', async (req, res, next) => {
     if (!aiEnabled()) return res.status(503).json({ error: 'The assistant is not set up: ANTHROPIC_API_KEY is missing' });
@@ -171,48 +225,72 @@ export function createApp({ db, password, secret }) {
     if (running.has(plan.id)) return res.status(409).json({ error: 'The assistant is already working on this plan' });
     running.add(plan.id);
     const author = who(req);
+
+    const stream = Boolean(req.body?.stream);
+    const send = (event) => { if (stream && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`); };
+    let heartbeat = null;
+    if (stream) {
+      res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Accel-Buffering': 'no' });
+      send({ type: 'start' });
+      heartbeat = setInterval(() => send({ type: 'ping' }), 15000);
+    }
+
     try {
       const chat = await db.listChat(plan.id, 20);
-      const result = await runAssistant({ doc: plan.doc, message, author, chat, settings: await aiSettings() });
-      let saved = null;
-      if (result.ops.length) {
-        const summary = `Assistant: ${result.results.join('; ')}`.slice(0, 2000);
-        const meta = { author: `AI (for ${author})`, source: 'ai', summary };
-        let version = await db.savePlan(plan.id, plan.version, result.draft, meta);
-        let doc = result.draft;
-        // Someone edited while the assistant worked: replay its changes on top.
-        for (let attempt = 0; !version && attempt < 3; attempt++) {
-          const latest = await db.getPlan(plan.id);
-          doc = structuredClone(latest.doc);
-          for (const op of result.ops) {
-            try { applyOp(doc, op, { author: meta.author }); } catch { /* skip ops that no longer apply */ }
-          }
-          version = await db.savePlan(plan.id, latest.version, doc, meta);
-        }
-        saved = version ? { version, doc } : null;
-      }
+      const result = await runAssistant({
+        doc: plan.doc, message, author, chat, settings: await aiSettings(),
+        onProgress: (text) => send({ type: 'step', text }),
+      });
+      const saved = result.ops.length ? await saveAssistantChanges(plan, result, author) : null;
       await db.addChat(plan.id, { role: 'user', author, text: message });
       await db.addChat(plan.id, { role: 'assistant', author: 'AI', text: result.reply, version: saved?.version ?? null });
       const fresh = await db.getPlan(plan.id);
-      res.json({ reply: result.reply, changes: result.results, version: fresh.version, doc: fresh.doc });
+      const payload = { reply: result.reply, changes: result.results, version: fresh.version, savedVersion: saved?.version ?? null, doc: fresh.doc };
+      if (stream) { send({ type: 'done', ...payload }); res.end(); } else res.json(payload);
     } catch (err) {
-      next(err);
+      if (!stream) return next(err);
+      console.error(err);
+      send({ type: 'error', error: err?.message || 'Something went wrong' });
+      res.end();
     } finally {
+      clearInterval(heartbeat);
       running.delete(plan.id);
     }
   });
 
-  // The page links its JS/CSS with a hash of their contents (?v=...), so any
-  // cache in front of the app (browser, CDN, proxy) fetches new files after a
-  // deploy. The page itself is never cached.
+  // Saves the assistant's draft as one version. If someone edited the plan
+  // while it worked, its operations are replayed on top of the latest plan.
+  async function saveAssistantChanges(plan, result, author) {
+    const summary = `Assistant: ${result.results.join('; ')}`.slice(0, 2000);
+    const meta = { author: `AI (for ${author})`, source: 'ai', summary };
+    let doc = result.draft;
+    let version = await db.savePlan(plan.id, plan.version, doc, meta);
+    for (let attempt = 0; !version && attempt < 3; attempt++) {
+      const latest = await db.getPlan(plan.id);
+      if (!latest) return null;
+      doc = structuredClone(latest.doc);
+      for (const op of result.ops) {
+        try { applyOp(doc, op, { author: meta.author }); } catch { /* skip ops that no longer apply */ }
+      }
+      version = await db.savePlan(plan.id, latest.version, doc, meta);
+    }
+    return version ? { version, doc } : null;
+  }
+
+  // The page links its JS/CSS under /v/<hash of public/>/, so any cache in
+  // front of the app (browser, CDN, proxy) fetches new files after a deploy.
+  // Putting the hash in the path rather than a query string means the modules
+  // app.js imports are stamped too. The page itself is never cached.
   const pub = join(root, 'public');
-  const stamp = (f) => createHash('sha1').update(readFileSync(join(pub, f))).digest('hex').slice(0, 10);
-  const indexHtml = readFileSync(join(pub, 'index.html'), 'utf8')
-    .replace('href="/styles.css"', `href="/styles.css?v=${stamp('styles.css')}"`)
-    .replace('src="/app.js"', `src="/app.js?v=${stamp('app.js')}"`);
+  const build = buildId(pub);
+  const indexHtml = readFileSync(join(pub, 'index.html'), 'utf8').replace(/(href|src)="\/(?!\/)/g, `$1="/v/${build}/`);
   const sendIndex = (_req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
   app.get(['/', '/index.html'], sendIndex);
+  app.use(`/v/${build}`, express.static(pub, { index: false, immutable: true, maxAge: '365d' }));
+  // A page loaded before a deploy may still ask for an older build's files.
+  app.use('/v/:old', express.static(pub, { index: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
   app.use(express.static(pub, { index: false, maxAge: 0 }));
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
   app.get(/^\/(?!api\/).*/, sendIndex);
 
   // eslint-disable-next-line no-unused-vars
