@@ -75,6 +75,8 @@ export function makeAuth({ password, secret }) {
   function recordFailure(req) {
     const ip = req.ip || req.socket.remoteAddress || '?';
     const count = (failures.get(ip)?.count || 0) + 1;
+    // Keep the table small: drop entries whose lockout has passed.
+    if (failures.size > 5000) for (const [k, f] of failures) if (f.until < Date.now()) failures.delete(k);
     failures.set(ip, { count, until: count >= 5 ? Date.now() + Math.min(2 ** (count - 5), 60) * 60_000 : 0 });
   }
 

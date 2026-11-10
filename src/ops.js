@@ -10,6 +10,7 @@ export const ITEM_KINDS = [
 ];
 export const STATUSES = ['idea', 'considering', 'shortlisted', 'booked', 'done', 'rejected'];
 export const LAYOUTS = ['cards', 'table', 'timeline', 'list', 'notes'];
+export const PRICE_PER = ['total', 'person'];
 
 const ITEM_FIELDS = [
   'kind', 'title', 'subtitle', 'description', 'status', 'date', 'endDate', 'time',
@@ -29,6 +30,8 @@ export function emptyPlan({ name = 'New plan', emoji = '🧭' } = {}) {
     start: '',
     end: '',
     travellers: [],
+    cover: '',
+    budget: null,
     tabs: [
       {
         id: newId('tab'),
@@ -57,7 +60,16 @@ function cleanPrice(p) {
     amount,
     currency: str(p.currency || 'GBP', 8).toUpperCase(),
     note: str(p.note, 200),
+    // "person" prices are multiplied by the number of travellers in totals.
+    ...(PRICE_PER.includes(p.per) ? { per: p.per } : {}),
   };
+}
+
+function cleanBudget(b) {
+  if (b == null || b === '') return null;
+  const amount = Number(typeof b === 'object' ? b.amount : b);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return { amount, currency: str((typeof b === 'object' && b.currency) || 'GBP', 8).toUpperCase() };
 }
 
 function cleanLinks(links) {
@@ -100,7 +112,8 @@ function cleanItem(input, base = null) {
       case 'price': {
         const next = cleanPrice(v);
         const prev = out.price;
-        const changed = JSON.stringify(prev) !== JSON.stringify(next);
+        // Only a new amount or currency is a price change worth remembering.
+        const changed = !prev || !next || prev.amount !== next.amount || prev.currency !== next.currency;
         if (changed && next) {
           out.priceHistory = [...(out.priceHistory || []), { ...next, at: new Date().toISOString() }].slice(-50);
         }
@@ -168,6 +181,8 @@ export function applyOp(doc, op, { author = '' } = {}) {
         }
       }
       if (Array.isArray(op.travellers)) doc.travellers = op.travellers.map((t) => str(t, 60)).slice(0, 30);
+      if ('cover' in op) doc.cover = /^https?:\/\//i.test(str(op.cover)) ? str(op.cover, 2000) : '';
+      if ('budget' in op) doc.budget = cleanBudget(op.budget);
       return { text: 'Updated plan details' };
     }
     case 'add_tab': {

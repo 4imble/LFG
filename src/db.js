@@ -95,7 +95,9 @@ export async function openDb(connectionString) {
       return rows.map((r) => ({
         id: r.id, version: r.version, archived: r.archived, updated_at: iso(r.updated_at), password_hash: r.password_hash,
         title: r.doc.title, emoji: r.doc.emoji, subtitle: r.doc.subtitle, start: r.doc.start, end: r.doc.end,
+        cover: r.doc.cover || '',
         itemCount: r.doc.tabs.reduce((n, t) => n + t.items.length, 0),
+        bookedCount: r.doc.tabs.reduce((n, t) => n + t.items.filter((i) => i.status === 'booked' || i.status === 'done').length, 0),
       }));
     },
     async getPlan(id) {
@@ -136,6 +138,9 @@ export async function openDb(connectionString) {
     async setSetting(key, value) {
       await pool.query(`INSERT INTO settings (key, value) VALUES ($1, $2)
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [key, JSON.stringify(value)]);
+    },
+    async deletePlan(id) {
+      await pool.query('DELETE FROM plans WHERE id = $1', [id]);
     },
     async setArchived(id, archived) {
       await pool.query('UPDATE plans SET archived = $1 WHERE id = $2', [archived, id]);

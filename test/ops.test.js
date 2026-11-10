@@ -47,3 +47,25 @@ test('links must be http(s) and replayed ops keep their ids', () => {
   assert.equal(item.id, 'item_abcdef1234');
   assert.deepEqual(item.links.map((l) => l.url), ['https://example.com']);
 });
+
+test('budget, cover and per-person prices are validated', () => {
+  const doc = emptyPlan();
+  applyOp(doc, { type: 'set_plan_details', budget: { amount: '14000', currency: 'gbp' }, cover: 'https://example.com/a.jpg' });
+  assert.deepEqual(doc.budget, { amount: 14000, currency: 'GBP' });
+  assert.equal(doc.cover, 'https://example.com/a.jpg');
+  applyOp(doc, { type: 'set_plan_details', budget: { amount: 0 }, cover: 'javascript:alert(1)' });
+  assert.equal(doc.budget, null);
+  assert.equal(doc.cover, '');
+  applyOp(doc, { type: 'set_plan_details', title: 'Renamed' });
+  assert.equal(doc.budget, null, 'fields that are not sent are left alone');
+
+  const { id } = applyOp(doc, { type: 'add_item', tab_id: doc.tabs[0].id, item: { title: 'Flight', price: { amount: 500, currency: 'GBP', per: 'person' } } });
+  const item = () => doc.tabs[0].items[0];
+  assert.equal(item().price.per, 'person');
+  applyOp(doc, { type: 'update_item', item_id: id, changes: { price: { amount: 500, currency: 'GBP', per: 'total', note: 'return' } } });
+  assert.equal(item().price.per, 'total');
+  assert.equal(item().priceHistory.length, 1, 'changing only the note or who it covers is not a price change');
+  applyOp(doc, { type: 'update_item', item_id: id, changes: { price: { amount: 450, currency: 'GBP', per: 'sideways' } } });
+  assert.equal(item().price.per, undefined);
+  assert.deepEqual(item().priceHistory.map((p) => p.amount), [500, 450]);
+});
