@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { openDb } from './db.js';
 import { makeAuth, hashPassword } from './auth.js';
 import { applyOp, applyOps, OpError } from './ops.js';
-import { aiEnabled, runAssistant } from './ai.js';
+import { aiEnabled, runAssistant, MODELS, EFFORTS, DEFAULT_SETTINGS } from './ai.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -70,6 +70,20 @@ export function createApp({ db, password, secret }) {
   app.get('/api/plans/:id', async (req, res) => {
     const plan = await loadPlan(req, res);
     if (plan) res.json(publicPlan(plan));
+  });
+
+  const aiSettings = async () => ({ ...DEFAULT_SETTINGS, ...(await db.getSetting('assistant')) });
+
+  app.get('/api/settings/assistant', adminOnly, async (_req, res) => {
+    res.json({ ...(await aiSettings()), models: MODELS.map(({ id, label, note }) => ({ id, label, note })), efforts: EFFORTS, enabled: aiEnabled() });
+  });
+
+  app.post('/api/settings/assistant', adminOnly, async (req, res) => {
+    const { model, effort } = req.body || {};
+    if (!MODELS.some((m) => m.id === model)) return res.status(400).json({ error: 'Unknown model' });
+    if (!EFFORTS.includes(effort)) return res.status(400).json({ error: 'Unknown effort level' });
+    await db.setSetting('assistant', { model, effort });
+    res.json({ ok: true, model, effort });
   });
 
   app.post('/api/plans/:id/password', adminOnly, async (req, res) => {
@@ -157,7 +171,7 @@ export function createApp({ db, password, secret }) {
     const author = who(req);
     try {
       const chat = await db.listChat(plan.id, 20);
-      const result = await runAssistant({ doc: plan.doc, message, author, chat });
+      const result = await runAssistant({ doc: plan.doc, message, author, chat, settings: await aiSettings() });
       let saved = null;
       if (result.ops.length) {
         const summary = `Assistant: ${result.results.join('; ')}`.slice(0, 2000);

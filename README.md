@@ -24,7 +24,7 @@ A shared, AI-assisted trip planner. Each trip is a **plan** (a sabbatical, a hol
    - `ANTHROPIC_API_KEY`: turns on the assistant (optional).
 4. Deploy. On startup the app runs any pending database migrations against `DATABASE_URL` (tracked in a `schema_migrations` table), so new versions upgrade the schema themselves.
 
-Optional settings: `AI_MODEL` (default `claude-opus-5-5`), `AI_EFFORT` (default `medium`; `low` is cheaper, `high` thinks harder), `SESSION_SECRET` (defaults to one derived from the password, so changing the password signs everyone out) and `PORT`.
+The assistant's model (Opus 5.5, Sonnet 5.5, Haiku 5.5 or Fable 5.2) and effort are chosen on the admin page. Optional settings: `AI_MODEL` and `AI_EFFORT` set the defaults until you pick something on the admin page (default `claude-opus-5-5` at `medium`), `SESSION_SECRET` (defaults to one derived from the password, so changing the password signs everyone out) and `PORT`.
 
 Health check: `GET /healthz`.
 
