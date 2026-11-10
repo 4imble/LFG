@@ -10,7 +10,7 @@ const url = process.env.TEST_DATABASE_URL;
 test('API end to end', { skip: !url && 'TEST_DATABASE_URL not set' }, async (t) => {
   const reset = new pg.Client({ connectionString: url });
   await reset.connect();
-  await reset.query('DROP TABLE IF EXISTS chat, versions, plans, schema_migrations CASCADE');
+  await reset.query('DROP TABLE IF EXISTS chat, versions, plans, settings, schema_migrations CASCADE');
   await reset.end();
 
   // Fake Messages API: first call adds a tab, second replies with text.
