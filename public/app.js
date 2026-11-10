@@ -16,6 +16,7 @@ const state = {
   plan: null,        // { id, version, doc }
   chat: [],
   chatOpen: false,
+  chatHidden: (() => { try { return localStorage.getItem('lfg_chat_hidden') === '1'; } catch { return false; } })(),
   thinking: false,
   filter: 'all',
   history: null,
@@ -68,6 +69,16 @@ function dateRange(a, b) {
   if (!a && !b) return '';
   if (a && b) return `${fmtDate(a, { short: true })} → ${fmtDate(b, { short: !b.startsWith(a.slice(0, 4)) ? false : true })}`;
   return fmtDate(a || b);
+}
+// Compact range for tight spaces: "21–24 Jan", "28 Jan – 2 Feb".
+function shortRange(a, b) {
+  if (!a || !b || a.length !== 10 || b.length !== 10) return dateRange(a, b);
+  const da = parseDate(a); const db = parseDate(b);
+  const day = (d) => d.getUTCDate();
+  const mon = (d) => d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
+  const yr = da.getUTCFullYear() !== db.getUTCFullYear() ? ` ${db.getUTCFullYear()}` : '';
+  if (!yr && da.getUTCMonth() === db.getUTCMonth()) return `${day(da)}–${day(db)} ${mon(db)}`;
+  return `${day(da)} ${mon(da)} – ${day(db)} ${mon(db)}${yr}`;
 }
 function ago(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
@@ -264,7 +275,7 @@ function renderPlan(r) {
   }
 
   $app.innerHTML = `${topbar()}
-    <main class="page">
+    <main class="page wide">
       <div class="plan-head">
         <div class="emoji">${esc(doc.emoji || '🧭')}</div>
         <div style="flex:1;min-width:220px">
@@ -279,12 +290,12 @@ function renderPlan(r) {
         <button class="btn sm" data-action="edit-plan">Edit details</button>
       </div>
       <nav class="tabs">${tabs}</nav>
-      <div class="layout ${state.ai ? 'with-chat' : ''}">
+      <div class="layout ${state.ai && !state.chatHidden ? 'with-chat' : ''} ${state.ai && state.chatHidden ? 'chat-hidden' : ''}">
         <div>${body}</div>
         ${state.ai ? chatPanel() : ''}
       </div>
     </main>
-    ${state.ai ? `<button class="btn primary chat-fab" data-action="toggle-chat">✨ Ask / dump</button>` : ''}`;
+    ${state.ai ? `<button class="btn primary chat-fab ${state.chatHidden ? 'desktop' : ''}" data-action="toggle-chat">✨ Ask / dump</button>` : ''}`;
   const log = document.querySelector('.chat-log');
   if (log) log.scrollTop = log.scrollHeight;
 }
@@ -387,18 +398,27 @@ function tableLayout(items) {
   const has = (k) => items.some((i) => (k === 'details' ? Object.keys(i.details || {}).length : i[k] && (!Array.isArray(i[k]) || i[k].length)));
   const detailKeys = [...new Set(items.flatMap((i) => Object.keys(i.details || {})))].slice(0, 4);
   const cols = [
-    ['Item', (i) => `<div style="display:flex;gap:8px;align-items:center"><span>${KINDS[i.kind] || ''}</span><div><strong>${esc(i.title)}</strong>${i.subtitle ? `<div class="small muted">${esc(i.subtitle)}</div>` : ''}</div></div>`],
-    has('date') && ['When', (i) => `${esc(dateRange(i.date, i.endDate))}${i.time ? `<div class="small muted">${esc(i.time)}</div>` : ''}`],
-    (has('location') || has('country')) && ['Where', (i) => esc([i.location, i.country].filter(Boolean).join(', '))],
-    ...detailKeys.map((k) => [k, (i) => esc(i.details?.[k] || '')]),
-    has('price') && ['Price', (i) => priceHtml(i), 'num'],
-    ['Status', (i) => statusPill(i.status)],
-    has('links') && ['Links', (i) => linksHtml(i.links)],
+    ['Item', (i) => `<div style="display:flex;gap:8px;align-items:flex-start"><span>${KINDS[i.kind] || ''}</span><div><strong>${esc(i.title)}</strong>${i.subtitle ? `<div class="small muted">${esc(i.subtitle)}</div>` : ''}</div></div>`, 'col-item'],
+    has('date') && ['When', (i) => `${esc(shortRange(i.date, i.endDate))}${i.time ? `<div class="small muted">${esc(i.time)}</div>` : ''}`, 'nowrap'],
+    (has('location') || has('country')) && ['Where', (i) => esc([i.location, i.country].filter(Boolean).join(', ')), 'col-text'],
+    ...detailKeys.map((k) => [k, (i) => esc(i.details?.[k] || ''), 'col-text']),
+    has('price') && ['Price', (i) => tablePrice(i), 'num nowrap'],
+    ['Status', (i) => statusPill(i.status), 'nowrap'],
+    has('links') && ['Links', (i) => linksHtml(i.links), 'col-links'],
   ].filter(Boolean);
   return `<div class="table-wrap"><table class="items">
     <thead><tr>${cols.map(([h, , c]) => `<th class="${c || ''}">${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>${items.map((i) => `<tr data-item="${esc(i.id)}">${cols.map(([, f, c]) => `<td class="${c || ''}">${f(i)}</td>`).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
+}
+
+function tablePrice(i) {
+  if (!i.price) return '';
+  const hist = i.priceHistory || [];
+  const first = hist[0];
+  const moved = hist.length > 1 && first.currency === i.price.currency && first.amount !== i.price.amount;
+  const down = moved && i.price.amount < first.amount;
+  return `<span class="price">${esc(money(i.price))}</span>${i.price.note ? `<div class="small muted">${esc(i.price.note)}</div>` : ''}${moved ? `<div class="trend ${down ? 'down' : 'up'}">${down ? '↓' : '↑'} from ${esc(money(first))}</div>` : ''}`;
 }
 
 function timelineLayout(items, { showTab = false } = {}) {
@@ -569,7 +589,7 @@ function chatPanel() {
     ? `<div class="msg user"><div class="who">${esc(m.author)}</div>${esc(m.text)}</div>`
     : `<div class="msg assistant">${md(m.text)}${m.version ? `<div class="small"><a href="#/p/${state.plan.id}/history/${m.version}">See changes (v${m.version})</a></div>` : ''}</div>`).join('');
   return `<aside class="chat ${state.chatOpen ? 'open' : ''}">
-    <div class="chat-head"><h3>✨ Assistant</h3><button class="icon-btn chat-close" data-action="toggle-chat" title="Close">✕</button></div>
+    <div class="chat-head"><h3>✨ Assistant</h3><button class="icon-btn chat-close" data-action="toggle-chat" title="Hide the assistant">✕</button></div>
     <div class="chat-log">
       ${msgs || `<div class="muted small">Tell me anything about this trip and I'll file it in the right place, make new tabs when needed, update prices, or answer questions about the plan.</div>
         <div class="chat-hints">${hints.map((h) => `<button class="hint" data-action="hint">${esc(h)}</button>`).join('')}</div>`}
@@ -907,7 +927,16 @@ document.addEventListener('click', async (e) => {
     case 'add-item': return itemEditor({ tabId: el.dataset.tab });
     case 'edit-plan': return planEditor();
     case 'filter': state.filter = el.dataset.filter; return rerender();
-    case 'toggle-chat': state.chatOpen = !state.chatOpen; document.querySelector('.chat')?.classList.toggle('open', state.chatOpen); return undefined;
+    case 'toggle-chat':
+      if (matchMedia('(max-width: 960px)').matches) {
+        state.chatOpen = !state.chatOpen;
+        document.querySelector('.chat')?.classList.toggle('open', state.chatOpen);
+        return undefined;
+      }
+      // On desktop, closing the panel gives its width back to the plan.
+      state.chatHidden = !state.chatHidden;
+      try { localStorage.setItem('lfg_chat_hidden', state.chatHidden ? '1' : ''); } catch { /* ignore */ }
+      return rerender();
     case 'hint': {
       const ta = document.querySelector('.chat-form textarea');
       ta.value = el.textContent.replace(/…$/, ''); ta.focus(); return undefined;
