@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { openDb } from './db.js';
-import { makeAuth } from './auth.js';
+import { makeAuth, hashPassword } from './auth.js';
 import { applyOp, applyOps, OpError } from './ops.js';
 import { aiEnabled, runAssistant } from './ai.js';
 
@@ -22,42 +22,66 @@ export function createApp({ db, password, secret }) {
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-  app.post('/api/login', (req, res) => {
-    const result = auth.checkPassword(req, req.body?.password);
+  // One login box: the admin password unlocks everything, a plan's password
+  // unlocks that plan. Logging in again adds to what is already unlocked.
+  app.post('/api/login', async (req, res) => {
+    const result = await auth.login(req, res, req.body?.password, await db.listPlanPasswords());
     if (!result.ok) {
       if (result.retryAfter) res.setHeader('Retry-After', result.retryAfter);
       return res.status(result.retryAfter ? 429 : 401).json({ error: result.retryAfter ? 'Too many attempts, try again later' : 'Wrong password' });
     }
-    auth.issue(req, res);
-    res.json({ ok: true });
+    res.json({ ok: true, admin: result.session.admin, plans: Object.keys(result.session.grants) });
   });
 
   app.post('/api/logout', (_req, res) => { auth.logout(res); res.json({ ok: true }); });
 
-  app.use('/api', (req, res, next) => (auth.valid(req) ? next() : res.status(401).json({ error: 'Not signed in' })));
+  // Every other API call needs a session that has unlocked something.
+  app.use('/api', (req, res, next) => {
+    req.session = auth.read(req);
+    if (!req.session.admin && !Object.keys(req.session.grants).length) return res.status(401).json({ error: 'Not signed in' });
+    next();
+  });
+  const adminOnly = (req, res, next) => (req.session.admin ? next() : res.status(403).json({ error: 'Only the admin password can do that' }));
+  const publicPlan = ({ password_hash: hash, ...plan }) => ({ ...plan, hasPassword: Boolean(hash) });
 
-  app.get('/api/session', (_req, res) => res.json({ ok: true, ai: aiEnabled() }));
+  app.get('/api/session', (req, res) => res.json({ ok: true, ai: aiEnabled(), admin: req.session.admin }));
 
-  app.get('/api/plans', async (_req, res) => res.json(await db.listPlans()));
+  app.get('/api/plans', async (req, res) => {
+    const plans = (await db.listPlans()).filter((p) => auth.canAccess(req.session, p));
+    res.json(plans.map(publicPlan));
+  });
 
-  app.post('/api/plans', async (req, res) => {
+  app.post('/api/plans', adminOnly, async (req, res) => {
     const name = String(req.body?.name || '').trim().slice(0, 100) || 'New plan';
     const emoji = String(req.body?.emoji || '🧭').slice(0, 8);
-    res.json(await db.createPlan({ name, emoji, author: who(req) }));
+    res.json(publicPlan(await db.createPlan({ name, emoji, author: who(req) })));
   });
 
   const loadPlan = async (req, res) => {
     const plan = await db.getPlan(req.params.id);
-    if (!plan) res.status(404).json({ error: 'No such plan' });
+    // Same answer for "missing" and "locked", so plan ids can't be probed.
+    if (!plan || !auth.canAccess(req.session, plan)) {
+      res.status(403).json({ error: 'This plan is locked. Enter its password to open it.', locked: true });
+      return null;
+    }
     return plan;
   };
 
   app.get('/api/plans/:id', async (req, res) => {
     const plan = await loadPlan(req, res);
-    if (plan) res.json(plan);
+    if (plan) res.json(publicPlan(plan));
   });
 
-  app.post('/api/plans/:id/archive', async (req, res) => {
+  app.post('/api/plans/:id/password', adminOnly, async (req, res) => {
+    const plan = await loadPlan(req, res);
+    if (!plan) return;
+    const pw = req.body?.password == null ? '' : String(req.body.password);
+    if (pw && pw.length < 6) return res.status(400).json({ error: 'Use at least 6 characters' });
+    await db.setPlanPassword(plan.id, pw ? await hashPassword(pw) : null);
+    res.json({ ok: true, hasPassword: Boolean(pw) });
+  });
+
+  app.post('/api/plans/:id/archive', adminOnly, async (req, res) => {
     const plan = await loadPlan(req, res);
     if (!plan) return;
     await db.setArchived(plan.id, Boolean(req.body?.archived));

@@ -35,6 +35,7 @@ const MIGRATIONS = [
      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
    );
    CREATE INDEX chat_plan_idx ON chat (plan_id, id);`,
+  'ALTER TABLE plans ADD COLUMN password_hash TEXT',
 ];
 
 export async function migrate(pool) {
@@ -70,7 +71,7 @@ export async function openDb(connectionString) {
   await migrate(pool);
 
   const iso = (d) => (d instanceof Date ? d.toISOString() : d);
-  const planRow = (r) => r && { id: r.id, doc: r.doc, version: r.version, archived: r.archived, updated_at: iso(r.updated_at) };
+  const planRow = (r) => r && { id: r.id, doc: r.doc, version: r.version, archived: r.archived, updated_at: iso(r.updated_at), password_hash: r.password_hash };
 
   async function tx(fn) {
     const client = await pool.connect();
@@ -89,15 +90,15 @@ export async function openDb(connectionString) {
 
   return {
     async listPlans() {
-      const { rows } = await pool.query('SELECT id, doc, version, archived, updated_at FROM plans ORDER BY archived, updated_at DESC');
+      const { rows } = await pool.query('SELECT id, doc, version, archived, updated_at, password_hash FROM plans ORDER BY archived, updated_at DESC');
       return rows.map((r) => ({
-        id: r.id, version: r.version, archived: r.archived, updated_at: iso(r.updated_at),
+        id: r.id, version: r.version, archived: r.archived, updated_at: iso(r.updated_at), password_hash: r.password_hash,
         title: r.doc.title, emoji: r.doc.emoji, subtitle: r.doc.subtitle, start: r.doc.start, end: r.doc.end,
         itemCount: r.doc.tabs.reduce((n, t) => n + t.items.length, 0),
       }));
     },
     async getPlan(id) {
-      const { rows } = await pool.query('SELECT id, doc, version, archived, updated_at FROM plans WHERE id = $1', [id]);
+      const { rows } = await pool.query('SELECT id, doc, version, archived, updated_at, password_hash FROM plans WHERE id = $1', [id]);
       return planRow(rows[0]);
     },
     async createPlan({ name, emoji, author }) {
@@ -119,6 +120,13 @@ export async function openDb(connectionString) {
           [id, next, doc, author, source, summary.slice(0, 2000)]);
         return next;
       });
+    },
+    async listPlanPasswords() {
+      const { rows } = await pool.query('SELECT id, password_hash FROM plans WHERE password_hash IS NOT NULL');
+      return rows;
+    },
+    async setPlanPassword(id, passwordHash) {
+      await pool.query('UPDATE plans SET password_hash = $1 WHERE id = $2', [passwordHash, id]);
     },
     async setArchived(id, archived) {
       await pool.query('UPDATE plans SET archived = $1 WHERE id = $2', [archived, id]);

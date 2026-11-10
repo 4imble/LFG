@@ -94,6 +94,7 @@ async function api(path, opts = {}) {
   });
   if (res.status === 401 && path !== '/login') { renderLogin(); throw new Error('Not signed in'); }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.locked) { state.plan = null; renderLogin({ locked: true }); throw new Error('Not signed in'); }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -113,6 +114,7 @@ function route() {
   if (parts[0] === 'p' && parts[1]) {
     return { view: 'plan', planId: parts[1], tab: parts[2] === 't' ? parts[3] : parts[2] === 'history' ? 'history' : 'overview', version: parts[2] === 'history' ? Number(parts[3]) || null : null };
   }
+  if (parts[0] === 'admin') return { view: 'admin' };
   return { view: 'home' };
 }
 const go = (hash) => { if (location.hash !== hash) location.hash = hash; else render(); };
@@ -121,6 +123,11 @@ window.addEventListener('hashchange', () => { state.filter = 'all'; render(); })
 async function render() {
   const r = route();
   try {
+    if (r.view === 'admin') {
+      if (!state.admin) return go('#/');
+      state.plans = await api('/plans');
+      return renderAdmin();
+    }
     if (r.view === 'home') {
       state.plans = await api('/plans');
       return renderHome();
@@ -142,16 +149,18 @@ async function render() {
 }
 
 // ---------- login ----------
-function renderLogin() {
+function renderLogin({ locked = false } = {}) {
   $modal.innerHTML = '';
+  const signedIn = state.signedIn;
   $app.innerHTML = `
     <div class="login">
       <form class="login-card" id="login">
-        <div><div class="display" style="font-size:44px">🧭</div><h1>LFG</h1><div class="muted">Let's flipping go. Sign in to plan.</div></div>
+        <div><div class="display" style="font-size:44px">🧭</div><h1>LFG</h1><div class="muted">${locked ? 'This plan has its own password. Enter it to open the plan.' : 'Let\'s flipping go. Enter the password you were given.'}</div></div>
         <label class="field">Your name <input type="text" name="name" value="${esc(name())}" placeholder="So we know who added what" autocomplete="nickname"></label>
         <label class="field">Password <input type="password" name="password" required autofocus autocomplete="current-password"></label>
         <div class="error" id="login-error"></div>
-        <button class="btn primary" style="justify-content:center">Let's go</button>
+        <button class="btn primary" style="justify-content:center">${locked ? 'Unlock' : 'Let\'s go'}</button>
+        ${signedIn ? '<a class="btn ghost" href="#/" style="justify-content:center">Back to my plans</a>' : ''}
       </form>
     </div>`;
   document.getElementById('login').addEventListener('submit', async (e) => {
@@ -160,7 +169,7 @@ function renderLogin() {
     setName(String(f.get('name') || '').trim());
     try {
       await api('/login', { body: { password: f.get('password') } });
-      await boot();
+      await boot(true);
     } catch (err) {
       document.getElementById('login-error').textContent = err.message;
     }
@@ -173,6 +182,7 @@ function topbar(extra = '') {
     <a class="brand" href="#/">LFG<span>.</span></a>
     ${extra}
     <div class="spacer"></div>
+    ${state.admin ? '<a class="btn ghost sm" href="#/admin">⚙️ Admin</a>' : ''}
     <button class="who btn ghost sm" data-action="rename-me" title="Change your name">👤 ${esc(name() || 'Set your name')}</button>
     <button class="icon-btn" data-action="theme" title="Toggle light/dark">◐</button>
     <button class="icon-btn" data-action="logout" title="Sign out">⎋</button>
@@ -195,9 +205,40 @@ function renderHome() {
       <section class="hero"><h1>Where next?</h1><p class="muted">Every trip gets its own plan. Dump ideas in, and the assistant keeps them tidy.</p></section>
       <div class="plan-grid">
         ${active.map(card).join('')}
-        <button class="plan-card new" data-action="new-plan"><div class="emoji">＋</div><div>New plan</div></button>
+        ${state.admin ? '<button class="plan-card new" data-action="new-plan"><div class="emoji">＋</div><div>New plan</div></button>' : '<button class="plan-card new" data-action="unlock"><div class="emoji">🔑</div><div>Got another plan\'s password?</div></button>'}
       </div>
       ${archived.length ? `<h2 class="section-title">Archived</h2><div class="plan-grid">${archived.map(card).join('')}</div>` : ''}
+    </main>`;
+}
+
+// ---------- admin ----------
+function renderAdmin() {
+  document.title = 'Admin · LFG';
+  const row = (p) => `
+    <div class="admin-row ${p.archived ? 'archived' : ''}">
+      <a class="admin-plan" href="#/p/${p.id}"><span class="emoji">${esc(p.emoji || '🧭')}</span>
+        <span><strong>${esc(p.title)}</strong><div class="small muted">${[dateRange(p.start, p.end), `${p.itemCount} items`, `updated ${ago(p.updated_at)}`, p.archived ? 'archived' : ''].filter(Boolean).join(' · ')}</div></span></a>
+      <div class="admin-pw">
+        <span class="small ${p.hasPassword ? '' : 'muted'}">${p.hasPassword ? '🔒 Has a password' : '🔓 No password: only you can open it'}</span>
+        <div style="display:flex;gap:6px">
+          <input type="text" data-pw-input="${p.id}" placeholder="${p.hasPassword ? 'New password' : 'Set a password'}" autocomplete="off">
+          <button class="btn sm" data-action="set-password" data-plan="${p.id}">${p.hasPassword ? 'Reset' : 'Set'}</button>
+          ${p.hasPassword ? `<button class="btn sm danger" data-action="clear-password" data-plan="${p.id}" title="Remove password">✕</button>` : ''}
+        </div>
+      </div>
+      <div class="admin-actions">
+        <button class="btn sm" data-action="copy-link" data-plan="${p.id}">🔗 Copy link</button>
+        <button class="btn sm ghost" data-action="archive" data-plan="${p.id}" data-archived="${p.archived ? 1 : 0}">${p.archived ? 'Unarchive' : 'Archive'}</button>
+      </div>
+    </div>`;
+  $app.innerHTML = `${topbar()}
+    <main class="page">
+      <section class="hero" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px"><h1>Admin</h1>
+        <p class="muted">Every plan, its password and its link. To share a plan, copy its link and send its password separately. Whoever has both can see and edit that plan, and nothing else.</p></div>
+        <button class="btn primary" data-action="new-plan">＋ New plan</button>
+      </section>
+      <div class="admin-list">${state.plans.length ? state.plans.map(row).join('') : '<div class="empty">No plans yet. Create the first one.</div>'}</div>
     </main>`;
 }
 
@@ -751,9 +792,15 @@ function planEditor() {
         </div>
         <label class="field">Who's going (comma separated) <input type="text" name="travellers" value="${esc((d.travellers || []).join(', '))}"></label>
         <label class="field">Summary <textarea name="summary" placeholder="The big picture">${esc(d.summary)}</textarea></label>
+        ${state.admin ? `<div class="field" style="border-top:1px solid var(--line);padding-top:14px">🔒 Plan password
+          <div class="small muted" style="font-weight:400">${state.plan.hasPassword ? 'This plan has its own password. Share the link and that password to give someone access to this plan only.' : 'No plan password yet, so only the admin password opens this plan. Set one to share it.'}</div>
+          <div style="display:flex;gap:8px"><input type="text" id="plan-password" placeholder="${state.plan.hasPassword ? 'New password' : 'Choose a password'}" autocomplete="off" style="flex:1">
+          <button type="button" class="btn sm" data-set-password>${state.plan.hasPassword ? 'Change' : 'Set'}</button>
+          ${state.plan.hasPassword ? '<button type="button" class="btn sm danger" data-clear-password>Remove</button>' : ''}</div>
+          <div class="small muted" style="font-weight:400">Changing or removing it signs out everyone who used the old one.</div></div>` : ''}
       </div>
       <div class="modal-foot">
-        <div class="left"><button type="button" class="btn sm" data-archive>${state.plans.find((p) => p.id === state.plan.id)?.archived ? 'Unarchive' : 'Archive plan'}</button></div>
+        <div class="left">${state.admin ? `<button type="button" class="btn sm" data-archive>${state.plans.find((p) => p.id === state.plan.id)?.archived ? 'Unarchive' : 'Archive plan'}</button>` : ''}</div>
         <button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save</button>
       </div>
     </form>`, (m) => {
@@ -765,11 +812,24 @@ function planEditor() {
       await saveOps([{ type: 'set_plan_details', ...f, travellers: f.travellers.split(',').map((t) => t.trim()).filter(Boolean) }]);
       closeModal(); rerender();
     };
-    m.querySelector('[data-archive]').onclick = async () => {
+    const setPw = async (password) => {
+      try {
+        const r = await api(`/plans/${state.plan.id}/password`, { body: { password } });
+        state.plan.hasPassword = r.hasPassword;
+        toast(r.hasPassword ? 'Plan password saved' : 'Plan password removed');
+        closeModal(); planEditor();
+      } catch (err) { toast(`⚠️ ${err.message}`); }
+    };
+    m.querySelector('[data-set-password]')?.addEventListener('click', () => setPw(m.querySelector('#plan-password').value));
+    m.querySelector('[data-clear-password]')?.addEventListener('click', (e) => {
+      if (e.target.dataset.sure !== '1') { e.target.dataset.sure = '1'; e.target.textContent = 'Really remove?'; return; }
+      setPw('');
+    });
+    m.querySelector('[data-archive]')?.addEventListener('click', async () => {
       const archived = !state.plans.find((p) => p.id === state.plan.id)?.archived;
       await api(`/plans/${state.plan.id}/archive`, { body: { archived } });
       closeModal(); go('#/');
-    };
+    });
   });
   api('/plans').then((p) => { state.plans = p; }).catch(() => {});
 }
@@ -816,6 +876,32 @@ document.addEventListener('click', async (e) => {
   if (!a && el.dataset.version) return go(`#/p/${state.plan.id}/history/${el.dataset.version}`);
   switch (a) {
     case 'new-plan': return newPlanModal();
+    case 'unlock': return renderLogin({ locked: true });
+    case 'copy-link': {
+      const link = `${location.origin}/#/p/${el.dataset.plan}`;
+      try { await navigator.clipboard.writeText(link); toast('Link copied. Send the plan password separately.'); } catch { prompt('Copy this link:', link); }
+      return undefined;
+    }
+    case 'set-password': {
+      const input = document.querySelector(`[data-pw-input="${el.dataset.plan}"]`);
+      const password = input.value;
+      if (!password) { input.focus(); return toast('Type a password first'); }
+      try {
+        await api(`/plans/${el.dataset.plan}/password`, { body: { password } });
+        toast('Password saved. Anyone using the old one is signed out of this plan.');
+        return render();
+      } catch (err) { return toast(`⚠️ ${err.message}`); }
+    }
+    case 'clear-password': {
+      if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = 'Really?'; return undefined; }
+      await api(`/plans/${el.dataset.plan}/password`, { body: { password: '' } });
+      toast('Password removed. Only the admin can open this plan now.');
+      return render();
+    }
+    case 'archive': {
+      await api(`/plans/${el.dataset.plan}/archive`, { body: { archived: el.dataset.archived !== '1' } });
+      return render();
+    }
     case 'add-tab': return tabEditor();
     case 'edit-tab': return tabEditor(state.plan.doc.tabs.find((t) => t.id === el.dataset.tab));
     case 'add-item': return itemEditor({ tabId: el.dataset.tab });
@@ -890,7 +976,7 @@ setInterval(async () => {
   } catch { /* offline, try later */ }
 }, 20000);
 
-async function boot() {
+async function boot(fromLogin = false) {
   try {
     const t = localStorage.getItem('lfg_theme');
     if (t) document.documentElement.dataset.theme = t;
@@ -898,7 +984,11 @@ async function boot() {
   try {
     const s = await fetch('/api/session');
     if (s.status === 401) return renderLogin();
-    state.ai = (await s.json()).ai;
+    const session = await s.json();
+    state.ai = session.ai;
+    state.admin = session.admin;
+    state.signedIn = true;
+    if (state.admin && fromLogin && route().view === 'home') return go('#/admin');
     if (!name()) {
       const n = prompt('What should we call you? (shown on things you add)');
       if (n) setName(n.trim());
