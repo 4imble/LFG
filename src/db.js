@@ -95,7 +95,9 @@ export async function openDb(connectionString) {
       return rows.map((r) => ({
         id: r.id, version: r.version, archived: r.archived, updated_at: iso(r.updated_at), password_hash: r.password_hash,
         title: r.doc.title, emoji: r.doc.emoji, subtitle: r.doc.subtitle, start: r.doc.start, end: r.doc.end,
+        cover: r.doc.cover || '',
         itemCount: r.doc.tabs.reduce((n, t) => n + t.items.length, 0),
+        bookedCount: r.doc.tabs.reduce((n, t) => n + t.items.filter((i) => i.status === 'booked' || i.status === 'done').length, 0),
       }));
     },
     async getPlan(id) {

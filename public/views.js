@@ -2,7 +2,7 @@
 // behaviour lives in app.js (events) and editors.js (dialogs).
 
 import { esc, safeUrl, md, money, plural, hostOf, fmtDate, dateRange, shortRange, nights, ago, todayStr, daysBetween, isFullDate } from './lib/format.js';
-import { allItems, searchItems, sortItems, SORTS, totals, spendByKind, fmtTotals, tripPhase, tripDay } from './lib/plan.js';
+import { allItems, searchItems, sortItems, SORTS, totals, spendByKind, fmtTotals, tripPhase, tripDay, isPerPerson, budgetUse, stayCoverage, tripStrip, nextUp } from './lib/plan.js';
 import { diffDocs } from './lib/diff.js';
 import { state, KINDS, STATUSES, LAYOUTS, icon, name, lsGet } from './core.js';
 
@@ -51,11 +51,15 @@ export function homeView() {
   const active = state.plans.filter((p) => !p.archived);
   const archived = state.plans.filter((p) => p.archived);
   const card = (p) => `
-    <a class="plan-card" href="#/p/${p.id}">
+    <a class="plan-card ${p.cover ? 'has-cover' : ''}" href="#/p/${p.id}">
+      ${p.cover ? `<img class="plan-cover" src="${esc(safeUrl(p.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <div class="plan-card-top"><div class="emoji">${esc(p.emoji || '🧭')}</div>${countdownChip(p.start, p.end)}</div>
       <h2>${esc(p.title)}</h2>
       ${p.subtitle ? `<div class="muted">${esc(p.subtitle)}</div>` : ''}
-      <div class="plan-card-foot small muted">${[dateRange(p.start, p.end), plural(p.itemCount, 'item'), `updated ${ago(p.updated_at)}`].filter(Boolean).map(esc).join(' · ')}</div>
+      <div class="plan-card-foot">
+        ${p.itemCount ? `<div class="bar" title="${p.bookedCount} of ${p.itemCount} booked"><span style="width:${(p.bookedCount / p.itemCount) * 100}%"></span></div>` : ''}
+        <div class="small muted">${[dateRange(p.start, p.end), p.itemCount ? `${p.bookedCount} of ${plural(p.itemCount, 'item')} booked` : 'Nothing in it yet', `updated ${ago(p.updated_at)}`].filter(Boolean).map(esc).join(' · ')}</div>
+      </div>
     </a>`;
   return `${topbar()}
     <main class="page">
@@ -131,13 +135,14 @@ export function planView(r) {
   const length = isFullDate(doc.start) && isFullDate(doc.end) ? daysBetween(doc.start, doc.end) + 1 : 0;
   const tabs = [
     `<a class="tab ${r.tab === 'overview' && !state.query ? 'active' : ''}" href="#/p/${state.plan.id}">Overview</a>`,
-    ...doc.tabs.map((t) => `<a class="tab ${r.tab === t.id && !state.query ? 'active' : ''}" href="#/p/${state.plan.id}/t/${t.id}">${t.emoji ? `<span class="tab-emoji">${esc(t.emoji)}</span>` : ''}${esc(t.title)}<span class="count">${t.items.length}</span></a>`),
+    ...doc.tabs.map((t) => `<a class="tab ${r.tab === t.id && !state.query ? 'active' : ''}" draggable="true" data-tab-id="${t.id}" href="#/p/${state.plan.id}/t/${t.id}">${t.emoji ? `<span class="tab-emoji">${esc(t.emoji)}</span>` : ''}${esc(t.title)}<span class="count">${t.items.length}</span></a>`),
     `<button class="tab add" data-action="add-tab" title="Add a tab" aria-label="Add a tab">${icon('plus')}</button>`,
   ].join('');
 
   return `${topbar()}
     <main class="page wide">
-      <section class="plan-hero">
+      <section class="plan-hero ${doc.cover ? 'has-cover' : ''}">
+        ${doc.cover ? `<img class="hero-cover" src="${esc(safeUrl(doc.cover))}" alt="" referrerpolicy="no-referrer">` : ''}
         <div class="hero-emoji">${esc(doc.emoji || '🧭')}</div>
         <div class="hero-main">
           <h1>${esc(doc.title)}</h1>
@@ -150,7 +155,6 @@ export function planView(r) {
           </div>
         </div>
         <div class="hero-actions">
-          ${state.ai ? `<button class="btn primary" data-action="toggle-chat">${icon('sparkles')}Assistant</button>` : ''}
           <button class="btn" data-action="edit-plan">${icon('edit')}<span class="hide-s">Edit details</span></button>
           <button class="btn icon-only" data-action="plan-menu" aria-label="More actions" title="More actions">${icon('more')}</button>
         </div>
@@ -161,6 +165,7 @@ export function planView(r) {
         <div class="nav-tools">
           <label class="search">${icon('search')}<input type="search" id="search" placeholder="Search this plan" value="${esc(state.query)}" autocomplete="off" aria-label="Search this plan"><kbd>/</kbd></label>
           <a class="tab ${r.tab === 'history' && !state.query ? 'active' : ''}" href="#/p/${state.plan.id}/history" title="History">${icon('history')}<span class="hide-s">History</span></a>
+          ${state.ai ? `<button class="btn primary sm nav-ai" data-action="toggle-chat" title="Open the assistant (a)">${icon('sparkles')}Assistant</button>` : ''}
         </div>
       </div>
       <div id="plan-body">${planBody(r)}</div>
@@ -197,9 +202,12 @@ function priceTrend(i) {
   return `<span class="trend ${down ? 'down' : 'up'}" title="Was ${esc(money(first))}">${down ? '↓' : '↑'} from ${esc(money(first))}</span>`;
 }
 
+// "per person" plus any note, without saying "per person" twice.
+export const priceNote = (p) => [p.per === 'person' && !/per person/i.test(p.note || '') ? 'per person' : '', p.note].filter(Boolean).join(' · ');
+
 export function priceHtml(i) {
   if (!i.price) return '';
-  return `<span class="price-wrap"><span class="price">${esc(money(i.price))}</span>${i.price.note ? ` <span class="small muted">${esc(i.price.note)}</span>` : ''} ${priceTrend(i)}</span>`;
+  return `<span class="price-wrap"><span class="price">${esc(money(i.price))}</span>${priceNote(i.price) ? ` <span class="small muted">${esc(priceNote(i.price))}</span>` : ''} ${priceTrend(i)}</span>`;
 }
 
 // A status pill. With an item id it is a button that opens the status menu.
@@ -214,8 +222,8 @@ export function detailsHtml(d = {}) {
 }
 
 // readonly cards (history snapshots) have no working buttons.
-export function card(i, { showTab = false, readonly = false } = {}) {
-  return `<article class="card k-${esc(i.kind)} ${i.status === 'rejected' ? 'rejected' : ''}" ${readonly ? '' : `data-item="${esc(i.id)}" tabindex="0"`}>
+export function card(i, { showTab = false, readonly = false, drag = false } = {}) {
+  return `<article class="card k-${esc(i.kind)} ${i.status === 'rejected' ? 'rejected' : ''}" ${readonly ? '' : `data-item="${esc(i.id)}" tabindex="0"`} ${drag ? 'draggable="true"' : ''}>
     ${i.image ? `<img class="card-img" src="${esc(safeUrl(i.image))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
     <div class="card-top">
       <div class="kind">${kindIcon(i.kind)}</div>
@@ -259,7 +267,9 @@ function tabView(tab) {
   } else if (!items.length) {
     content = '<div class="empty">Nothing matches this filter. <button class="btn sm" data-action="filter" data-filter="everything">Show everything</button></div>';
   } else {
-    content = ({ cards: cardsLayout, table: tableLayout, timeline: timelineLayout, list: listLayout, notes: notesLayout }[tab.layout] || cardsLayout)(items);
+    // Dragging to reorder only makes sense when the tab shows its own order.
+    const drag = sort === 'manual';
+    content = ({ cards: cardsLayout, table: tableLayout, timeline: timelineLayout, list: listLayout, notes: notesLayout }[tab.layout] || cardsLayout)(items, { drag });
   }
   return `<div class="tab-head">
       <div class="tab-title"><h2>${tab.emoji ? `${esc(tab.emoji)} ` : ''}${esc(tab.title)}</h2>${tab.description ? `<div class="desc">${md(tab.description)}</div>` : ''}</div>
@@ -286,7 +296,7 @@ function tabView(tab) {
 
 const cardsLayout = (items, opts) => `<div class="cards">${items.map((i) => card(i, opts)).join('')}</div>`;
 
-function tableLayout(items) {
+function tableLayout(items, { drag = false } = {}) {
   const has = (k) => items.some((i) => i[k] && (!Array.isArray(i[k]) || i[k].length));
   const detailKeys = [...new Set(items.flatMap((i) => Object.keys(i.details || {})))].slice(0, 4);
   const cols = [
@@ -294,13 +304,13 @@ function tableLayout(items) {
     has('date') && ['When', (i) => `${esc(shortRange(i.date, i.endDate))}${i.time ? `<div class="small muted">${esc(i.time)}</div>` : ''}`, 'nowrap'],
     (has('location') || has('country')) && ['Where', (i) => esc([i.location, i.country].filter(Boolean).join(', ')), 'col-text'],
     ...detailKeys.map((k) => [k, (i) => esc(i.details?.[k] || ''), 'col-text']),
-    has('price') && ['Price', (i) => (i.price ? `<span class="price">${esc(money(i.price))}</span>${i.price.note ? `<div class="small muted">${esc(i.price.note)}</div>` : ''}${priceTrend(i) ? `<div>${priceTrend(i)}</div>` : ''}` : ''), 'num nowrap'],
+    has('price') && ['Price', (i) => (i.price ? `<span class="price">${esc(money(i.price))}</span>${priceNote(i.price) ? `<div class="small muted">${esc(priceNote(i.price))}</div>` : ''}${priceTrend(i) ? `<div>${priceTrend(i)}</div>` : ''}` : ''), 'num nowrap'],
     ['Status', (i) => statusPill(i.status, i.id), 'nowrap'],
     has('links') && ['Links', (i) => linksHtml(i.links), 'col-links'],
   ].filter(Boolean);
   return `<div class="table-wrap"><table class="items">
     <thead><tr>${cols.map(([h, , c]) => `<th class="${c || ''}">${esc(h)}</th>`).join('')}</tr></thead>
-    <tbody>${items.map((i) => `<tr data-item="${esc(i.id)}" tabindex="0" class="${i.status === 'rejected' ? 'rejected' : ''}">${cols.map(([h, f, c]) => { const v = f(i); return `<td class="${c || ''} ${v ? '' : 'blank'}" data-label="${esc(h)}">${v}</td>`; }).join('')}</tr>`).join('')}</tbody>
+    <tbody>${items.map((i) => `<tr data-item="${esc(i.id)}" tabindex="0" ${drag ? 'draggable="true"' : ''} class="${i.status === 'rejected' ? 'rejected' : ''}">${cols.map(([h, f, c]) => { const v = f(i); return `<td class="${c || ''} ${v ? '' : 'blank'}" data-label="${esc(h)}">${v}</td>`; }).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
 }
 
@@ -334,8 +344,8 @@ function timelineLayout(items, { showTab = false } = {}) {
   </div>`;
 }
 
-function checkRow(i) {
-  return `<div class="check-row ${i.status === 'done' ? 'done' : ''}">
+function checkRow(i, drag = false) {
+  return `<div class="check-row ${i.status === 'done' ? 'done' : ''}" ${drag ? `draggable="true" data-drag-item="${esc(i.id)}"` : ''}>
       <input type="checkbox" data-action="toggle-done" data-item="${esc(i.id)}" ${i.status === 'done' ? 'checked' : ''} aria-label="Mark ${esc(i.title)} as done">
       <div class="body" data-item="${esc(i.id)}" tabindex="0">
         <div class="title"><strong>${esc(i.title)}</strong>${i.date ? ` <span class="small muted">· by ${esc(fmtDate(i.date, { short: true }))}</span>` : ''}${i.price ? ` <span class="small">· ${priceHtml(i)}</span>` : ''}</div>
@@ -346,15 +356,15 @@ function checkRow(i) {
     </div>`;
 }
 
-function listLayout(items) {
+function listLayout(items, { drag = false } = {}) {
   const done = items.filter((i) => i.status === 'done').length;
   return `${items.length > 1 ? `<div class="progress-line"><div class="bar"><span style="width:${(done / items.length) * 100}%"></span></div><span class="small muted">${done} of ${items.length} done</span></div>` : ''}
-    <div class="checklist">${items.map(checkRow).join('')}</div>`;
+    <div class="checklist">${items.map((i) => checkRow(i, drag)).join('')}</div>`;
 }
 
-function notesLayout(items) {
+function notesLayout(items, { drag = false } = {}) {
   return `<div class="notes">${items.map((i) => `
-    <article class="note" data-item="${esc(i.id)}" tabindex="0">
+    <article class="note" data-item="${esc(i.id)}" tabindex="0" ${drag ? 'draggable="true"' : ''}>
       <h3>${kindIcon(i.kind)} ${esc(i.title)}</h3>
       ${i.subtitle ? `<div class="muted small">${esc(i.subtitle)}</div>` : ''}
       <div class="desc-text">${md(i.description)}</div>
@@ -374,6 +384,41 @@ function searchView(doc) {
 }
 
 // ---------- overview ----------
+const panel = (title, body, cls = '') => `<section class="panel ${cls}"><h3>${title}</h3>${body}</section>`;
+
+// A strip of the whole trip: where you are, where you sleep and travel days,
+// with the nights that have no stay yet listed underneath.
+function glance(doc) {
+  const strip = tripStrip(doc);
+  if (!strip) return '';
+  const cov = stayCoverage(doc);
+  const { lanes, rows } = strip;
+  if (!lanes.place.length && !lanes.stay.length && !lanes.travel.length) {
+    return panel('Trip at a glance', '<p class="hint-text">Give places and stays a start and end date and they appear here as a picture of the whole trip, with the nights that still need somewhere to sleep.</p>');
+  }
+  const ROW = 30;
+  const colour = (c) => (c ? `c${strip.countries.indexOf(c) % 6}` : 'c-none');
+  const firm = (s) => s === 'booked' || s === 'done';
+  const grid = strip.months.map((m) => `<i class="g-line" style="left:${m.left}%"></i>`).join('');
+  const today = todayStr();
+  const todayAt = today >= doc.start && today <= doc.end ? `<i class="g-today" style="left:${(daysBetween(doc.start, today) / strip.days) * 100}%" title="Today"></i>` : '';
+  const bar = (b, lane) => `<button type="button" class="seg ${lane} ${lane === 'travel' ? '' : colour(b.country)} ${firm(b.status) ? '' : 'tentative'}" data-item="${esc(b.id)}"
+      style="left:${b.left}%;width:${lane === 'travel' ? 0 : b.width}%;top:${b.row * ROW}px" title="${esc(`${b.title} · ${shortRange(b.date, b.endDate) || fmtDate(b.date)} · ${b.status}`)}">${lane === 'travel' ? '' : `<span>${esc(b.title)}</span>`}</button>`;
+  const lane = (key, label) => (lanes[key].length ? `<div class="g-label">${label}</div><div class="g-track" style="height:${rows[key] * ROW - 4}px">${grid}${todayAt}${lanes[key].map((b) => bar(b, key)).join('')}</div>` : '');
+  let gaps = '';
+  if (cov && !lanes.stay.length) gaps = '<p class="hint-text">No stays with dates yet, so every night is still open.</p>';
+  else if (cov && !cov.gaps.length) gaps = '<p class="hint-text">Every night has somewhere to stay. 🎉</p>';
+  else if (cov) {
+    gaps = `<p class="gaps"><strong>${plural(cov.nights - cov.covered, 'night')} with nowhere to stay yet:</strong> ${cov.gaps.slice(0, 5).map((g) => `<span>${esc(shortRange(g.from, g.to))} <small>${g.nights}n</small></span>`).join('')}${cov.gaps.length > 5 ? `<span>and ${cov.gaps.length - 5} more</span>` : ''}</p>`;
+  }
+  return panel(`Trip at a glance${strip.countries.length ? `<span class="g-legend">${strip.countries.map((c) => `<span><i class="${colour(c)}"></i>${esc(c)}</span>`).join('')}</span>` : ''}`, `
+    <div class="glance-scroll"><div class="glance">
+      <div></div><div class="g-track g-months">${strip.months.map((m) => `<span style="left:${m.left}%">${esc(fmtDate(m.key, { short: true }).split(' ')[0])}</span>`).join('')}</div>
+      ${lane('place', 'Where')}${lane('stay', 'Stays')}${lane('travel', 'Travel')}
+    </div></div>
+    ${gaps}`, 'glance-panel');
+}
+
 function overview(doc) {
   const items = allItems(doc);
   if (!items.length && !doc.summary) {
@@ -382,10 +427,16 @@ function overview(doc) {
       <p>${state.ai ? 'Dump anything into the assistant: flights you\'ve spotted, countries you fancy, things to do. It will sort them into tabs.' : 'Open a tab and start dropping ideas in.'}</p>
       ${state.ai ? `<button class="btn primary" data-action="toggle-chat">${icon('sparkles')}Open the assistant</button>` : ''}</div>`;
   }
+  const people = doc.travellers?.length || 1;
   const byStatus = Object.fromEntries(STATUSES.map((s) => [s, items.filter((i) => i.status === s).length]));
   const live = items.filter((i) => i.status !== 'rejected');
-  const sums = totals(items);
-  const byKind = spendByKind(items);
+  const booked = byStatus.booked + byStatus.done;
+  const deciding = byStatus.considering + byStatus.shortlisted;
+  const sums = totals(items, people);
+  const byKind = spendByKind(items, people);
+  const budget = budgetUse(doc, sums);
+  const cov = stayCoverage(doc);
+  const multiplied = people > 1 && items.some((i) => i.price && isPerPerson(i.price) && ['booked', 'done', 'shortlisted'].includes(i.status));
   const countries = {};
   for (const i of live) if (i.country) countries[i.country] = (countries[i.country] || 0) + 1;
   const pinned = items.filter((i) => i.pinned);
@@ -393,23 +444,45 @@ function overview(doc) {
   const todoTabs = new Set(doc.tabs.filter((t) => t.layout === 'list').map((t) => t.id));
   const todos = live.filter((i) => i.kind === 'todo' || todoTabs.has(i.tabId));
   const openTodos = sortItems(todos.filter((i) => i.status !== 'done').map((i) => ({ ...i, pinned: false })), 'date');
+  const upcoming = nextUp(doc, todayStr(), 6);
   const since = state.newSince;
+  const cash = (amount, currency) => money({ amount, currency });
+  const when = (i) => (i.overdue ? `${plural(-i.inDays, 'day')} late` : i.inDays <= 0 ? (i.inDays === 0 ? 'Today' : 'Now') : i.inDays === 1 ? 'Tomorrow' : i.inDays < 60 ? `In ${i.inDays} days` : `In ${Math.round(i.inDays / 7)} weeks`);
 
-  const panel = (title, body) => `<section class="panel"><h3>${title}</h3>${body}</section>`;
+  const stat = (n, label, sub = '', extra = '') => `<div class="stat"><div class="n">${n}</div><div class="l">${label}</div>${extra}${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  const stats = [
+    stat(`${booked}<small> of ${live.length}</small>`, 'Booked', deciding ? `${deciding} still to decide` : live.length - booked ? `${plural(live.length - booked, 'idea')} to firm up` : 'Everything is booked'),
+    cov
+      ? stat(`${cov.covered}<small> of ${cov.nights}</small>`, 'Nights with a stay', cov.booked === cov.covered ? (cov.covered ? 'All of those are booked' : 'Add stays with dates') : `${cov.booked} booked, ${cov.covered - cov.booked} in mind`, `<div class="bar two"><span style="width:${(cov.booked / cov.nights) * 100}%"></span><span class="soft" style="width:${((cov.covered - cov.booked) / cov.nights) * 100}%"></span></div>`)
+      : stat(live.length, 'Things in the plan', 'Set the trip dates to see nights covered'),
+    budget
+      ? stat(`<span class="money-n">${esc(cash(budget.booked, budget.currency))}</span><small> of ${esc(cash(budget.amount, budget.currency))}</small>`, 'Budget booked',
+        budget.left >= 0 ? `${esc(cash(budget.left, budget.currency))} left if you book the shortlist` : `<span class="over">${esc(cash(-budget.left, budget.currency))} over if you book the shortlist</span>`,
+        `<div class="bar two ${budget.left < 0 ? 'over' : ''}"><span style="width:${Math.min(100, (budget.booked / budget.amount) * 100)}%"></span><span class="soft" style="width:${Math.max(0, Math.min(100 - (budget.booked / budget.amount) * 100, (budget.shortlisted / budget.amount) * 100))}%"></span></div>`)
+      : stat(`<span class="money-n">${esc(fmtTotals(sums.booked) || '—')}</span>`, 'Spent or booked', 'Set a budget in Edit details to track it'),
+    stat(`<span class="money-n">${esc(fmtTotals(sums.shortlisted) || '—')}</span>`, 'Shortlisted, not booked', budget && Object.keys(budget.other).length ? `Not in the budget sum: ${esc(fmtTotals(budget.other))}` : ''),
+  ].join('');
+
   const side = [
+    upcoming.length ? panel('Next up', `<div class="next-list">${upcoming.map((i) => `
+      <button type="button" class="next ${i.overdue ? 'overdue' : ''}" data-item="${esc(i.id)}">
+        <span class="kind k-${esc(i.kind)}">${kindIcon(i.kind)}</span>
+        <span class="grow"><strong class="clamp-1">${esc(i.title)}</strong><span class="small muted clamp-1">${esc([fmtDate(i.date, { short: true }), i.todo ? 'to do' : i.status, i.location || i.country].filter(Boolean).join(' · '))}</span></span>
+        <span class="when">${esc(when(i))}</span>
+      </button>`).join('')}</div>`) : '',
     panel('Progress', `
       <div class="status-bar">${STATUSES.filter((s) => byStatus[s]).map((s) => `<span class="${s}" style="width:${(byStatus[s] / items.length) * 100}%" title="${s}: ${byStatus[s]}"></span>`).join('')}</div>
-      <div class="legend">${STATUSES.filter((s) => byStatus[s]).map((s) => `<span><i class="${s}"></i>${cap(s)} <b>${byStatus[s]}</b></span>`).join('')}</div>`),
+      <div class="legend">${STATUSES.filter((s) => byStatus[s]).map((s) => `<button type="button" data-action="search-for" data-q="${s}"><i class="${s}"></i>${cap(s)} <b>${byStatus[s]}</b></button>`).join('')}</div>`),
     byKind.length ? panel('Money', `
       <table class="money">
         <thead><tr><th></th><th>Booked</th><th>Shortlisted</th></tr></thead>
         <tbody>${byKind.map((k) => `<tr><td>${kindIcon(k.kind)} ${esc(cap(k.kind))}</td><td>${esc(fmtTotals(k.booked) || '—')}</td><td class="muted">${esc(fmtTotals(k.shortlisted) || '—')}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td>Total</td><td>${esc(fmtTotals(sums.booked) || '—')}</td><td class="muted">${esc(fmtTotals(sums.shortlisted) || '—')}</td></tr></tfoot>
       </table>
-      <p class="hint-text">Prices are added up as entered, so a “per person” price counts once.</p>`) : '',
+      <p class="hint-text">${multiplied ? `Per-person prices are counted for all ${people} of you.` : people > 1 ? 'Mark a price as “per person” and it is counted for everyone going.' : 'Add who\'s going in Edit details to count per-person prices for everyone.'}</p>`) : '',
     todos.length ? panel(`To do <span class="small muted">${todos.length - openTodos.length} of ${todos.length} done</span>`, `
       <div class="bar"><span style="width:${((todos.length - openTodos.length) / todos.length) * 100}%"></span></div>
-      ${openTodos.length ? `<div class="checklist flat">${openTodos.slice(0, 6).map(checkRow).join('')}</div>${openTodos.length > 6 ? `<p class="hint-text">and ${openTodos.length - 6} more</p>` : ''}` : '<p class="hint-text">All done. 🎉</p>'}`) : '',
+      ${openTodos.length ? `<div class="checklist flat">${openTodos.slice(0, 6).map((i) => checkRow(i)).join('')}</div>${openTodos.length > 6 ? `<p class="hint-text">and ${openTodos.length - 6} more</p>` : ''}` : '<p class="hint-text">All done. 🎉</p>'}`) : '',
     Object.keys(countries).length ? panel('Countries', `<div class="country-chips">${Object.entries(countries).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<button class="country" data-action="search-for" data-q="${esc(c)}">${esc(c)}<small>${n}</small></button>`).join('')}</div>`) : '',
     panel('Tabs', `<div class="tab-list">${doc.tabs.map((t) => `<a href="#/p/${state.plan.id}/t/${t.id}"><span class="kind">${esc(t.emoji || '🗂️')}</span><span class="grow"><strong>${esc(t.title)}</strong>${t.description ? `<span class="small muted clamp-1">${esc(t.description)}</span>` : ''}</span><span class="count">${t.items.length}</span></a>`).join('')}</div>`),
   ].join('');
@@ -418,12 +491,8 @@ function overview(doc) {
     <div class="ov-main">
       ${since ? `<div class="banner">${icon('history')}<span><strong>${plural(since.to - since.from, 'change')}</strong> since you were last here.</span><a class="btn sm" href="#/p/${state.plan.id}/history">See what changed</a><button class="icon-btn" data-action="dismiss-since" aria-label="Dismiss">${icon('x')}</button></div>` : ''}
       ${doc.summary ? `<div class="panel summary desc-text">${md(doc.summary)}</div>` : ''}
-      <div class="ov-grid">
-        <div class="stat"><div class="n">${live.length}</div><div class="l">Things in the plan</div></div>
-        <div class="stat"><div class="n">${byStatus.booked + byStatus.done}</div><div class="l">Booked</div></div>
-        <div class="stat"><div class="n money-n">${esc(fmtTotals(sums.booked) || '—')}</div><div class="l">Spent or booked</div></div>
-        <div class="stat"><div class="n money-n">${esc(fmtTotals(sums.shortlisted) || '—')}</div><div class="l">Shortlisted, not booked</div></div>
-      </div>
+      <div class="ov-grid">${stats}</div>
+      ${glance(doc)}
       ${pinned.length ? `<h2 class="section-title">Pinned</h2>${cardsLayout(pinned, { showTab: true })}` : ''}
       ${dated.length ? `<h2 class="section-title">Itinerary so far</h2><p class="small muted section-note">Shortlisted and booked things with dates, across every tab.</p>${timelineLayout(dated, { showTab: true })}` : ''}
     </div>

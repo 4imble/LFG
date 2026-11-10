@@ -46,7 +46,8 @@ const itemSchema = {
       properties: {
         amount: { type: 'number' },
         currency: { type: 'string', description: 'ISO code, default GBP.' },
-        note: { type: 'string', description: 'e.g. "per person", "total for 2", "per night".' },
+        note: { type: 'string', description: 'e.g. "return", "total for 2", "per night".' },
+        per: { type: 'string', enum: ['total', 'person'], description: '"person" when the amount is for one traveller (totals multiply it by the number of travellers); "total" when it covers everyone.' },
       },
       required: ['amount'],
     },
@@ -73,13 +74,18 @@ const tools = [
   },
   {
     name: 'set_plan_details',
-    description: 'Change the plan\'s own details: title, emoji, subtitle, summary (markdown), start/end dates (YYYY-MM-DD) and travellers.',
+    description: 'Change the plan\'s own details: title, emoji, subtitle, summary (markdown), start/end dates (YYYY-MM-DD), travellers, cover photo and overall budget.',
     input_schema: {
       type: 'object',
       properties: {
         title: { type: 'string' }, emoji: { type: 'string' }, subtitle: { type: 'string' },
         summary: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' },
         travellers: { type: 'array', items: { type: 'string' } },
+        cover: { type: 'string', description: 'https address of a wide photo shown behind the plan title. Empty string removes it.' },
+        budget: {
+          type: 'object', description: 'Overall budget for the whole trip, for everyone. Omit amount (or pass 0) to remove it.',
+          properties: { amount: { type: 'number' }, currency: { type: 'string' } },
+        },
       },
     },
   },
@@ -164,7 +170,8 @@ How plans work:
 - Each tab holds items. Use the most specific kind, fill structured fields (dates, price, location, country, links, details) rather than burying facts in the description, and keep titles short.
 - The "Inbox" tab is where unsorted dumps go. When asked to tidy up, sort Inbox items into proper tabs.
 - Statuses: idea → considering → shortlisted → booked → done, or rejected. Default to "idea" for new suggestions unless the user says otherwise.
-- Prices: always record currency. When a user gives an updated price for something that already exists, update that item's price (history is kept automatically) instead of adding a duplicate.
+- Prices: always record currency, and set per to "person" when a price is for one traveller so totals come out right. The overview compares what is booked and shortlisted with the plan's budget when one is set.
+- Places and stays with start and end dates appear on a "trip at a glance" strip that shows where the travellers are and which nights have nowhere to stay yet, so give those items full dates whenever they are known. When a user gives an updated price for something that already exists, update that item's price (history is kept automatically) instead of adding a duplicate.
 
 How to work:
 - Call view_plan first to see the current state and ids, unless you already have it this turn.

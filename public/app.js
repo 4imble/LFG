@@ -1,6 +1,7 @@
 // LFG front end entry point: rendering, events, polling and start-up.
 // Plain ES modules, no build step.
 
+import { esc } from './lib/format.js';
 import { toICS } from './lib/plan.js';
 import {
   $app, state, hooks, STATUSES, lsGet, lsSet, name, setName, toast, api, apiStream, isSignedOut,
@@ -10,7 +11,7 @@ import {
 import { loginView, homeView, adminView, planView, planBody, chatLog } from './views.js';
 import { itemDetail, itemEditor, tabEditor, planEditor, newPlanModal, deletePlanModal, nameModal, copyModal } from './editors.js';
 
-const errorPage = (message) => `<div class="page"><div class="empty"><div class="big">🧭</div><p>${message}</p><a class="btn" href="#/">Back to plans</a></div></div>`;
+const errorPage = (message) => `<div class="page"><div class="empty"><div class="big">🧭</div><p>${esc(message)}</p><a class="btn" href="#/">Back to plans</a></div></div>`;
 
 // ---------- rendering ----------
 async function render() {
@@ -49,7 +50,7 @@ async function render() {
     }
     renderPlan(r);
   } catch (err) {
-    if (!isSignedOut(err)) $app.innerHTML = errorPage(err.message.replace(/[<&]/g, ''));
+    if (!isSignedOut(err)) $app.innerHTML = errorPage(err.message);
   }
   return undefined;
 }
@@ -409,8 +410,83 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'n' && state.plan.doc.tabs.some((t) => t.id === r.tab)) { e.preventDefault(); actions['add-item']({ dataset: { tab: r.tab } }); }
 });
 
-// A broken image address shouldn't leave an empty box on a card.
-document.addEventListener('error', (e) => { if (e.target.matches?.('.card-img, .detail-img')) e.target.remove(); }, true);
+// A broken image address shouldn't leave an empty box, or white text on nothing.
+document.addEventListener('error', (e) => {
+  if (!e.target.matches?.('.card-img, .detail-img, .hero-cover, .plan-cover')) return;
+  e.target.parentElement.classList.remove('has-cover');
+  e.target.remove();
+}, true);
+
+// ---------- drag and drop ----------
+// Drag an item to reorder it within its tab, or onto a tab to move it there.
+// Drag a tab to reorder the tabs. (Mouse only: touch screens don't send these.)
+let drag = null; // { type: 'item' | 'tab', id }
+const dragId = (el) => el?.dataset.dragItem || el?.dataset.item;
+const clearDrop = () => document.querySelectorAll('.drop-before, .drop-after, .drop-into').forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
+
+// Where a drop would land: on a tab pill, or before/after another item.
+function dropTarget(e) {
+  const tab = e.target.closest?.('.tabs a.tab[data-tab-id]');
+  if (tab) return { tab };
+  if (drag?.type !== 'item') return null;
+  const el = e.target.closest?.('[draggable="true"]');
+  if (!el || !dragId(el) || dragId(el) === drag.id) return null;
+  const r = el.getBoundingClientRect();
+  // Cards sit side by side, so use left/right there and top/bottom in lists.
+  const sideways = el.classList.contains('card') && el.parentElement.children.length > 1 && r.width < el.parentElement.clientWidth * 0.9;
+  const after = sideways ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
+  return { el, after };
+}
+
+document.addEventListener('dragstart', (e) => {
+  const el = e.target.closest?.('[draggable="true"]');
+  if (!el) return;
+  drag = el.dataset.tabId ? { type: 'tab', id: el.dataset.tabId } : { type: 'item', id: dragId(el) };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', drag.id);
+  el.classList.add('dragging');
+});
+document.addEventListener('dragover', (e) => {
+  if (!drag) return;
+  const t = dropTarget(e);
+  clearDrop();
+  if (!t) return;
+  if (t.tab && t.tab.dataset.tabId === (drag.type === 'tab' ? drag.id : findItem(drag.id)?.tab.id)) return;
+  e.preventDefault();
+  if (t.tab) t.tab.classList.add(drag.type === 'item' ? 'drop-into' : 'drop-before');
+  else t.el.classList.add(t.after ? 'drop-after' : 'drop-before');
+});
+document.addEventListener('dragend', () => {
+  drag = null;
+  clearDrop();
+  document.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+});
+document.addEventListener('drop', async (e) => {
+  const d = drag;
+  const t = d && dropTarget(e);
+  if (!t) return;
+  e.preventDefault();
+  try {
+    const { tabs } = state.plan.doc;
+    if (t.tab && d.type === 'tab') {
+      const ids = tabs.map((x) => x.id).filter((id) => id !== d.id);
+      ids.splice(ids.indexOf(t.tab.dataset.tabId), 0, d.id);
+      await saveOps([{ type: 'reorder_tabs', tab_ids: ids }]);
+    } else if (t.tab) {
+      const dest = tabs.find((x) => x.id === t.tab.dataset.tabId);
+      if (!dest || findItem(d.id)?.tab === dest) return;
+      const res = await saveOps([{ type: 'move_item', item_id: d.id, to_tab_id: dest.id }]);
+      undoToast(`Moved to ${dest.title}`, res.version);
+    } else {
+      const { tab } = findItem(d.id);
+      const rest = tab.items.filter((i) => i.id !== d.id);
+      const at = rest.findIndex((i) => i.id === dragId(t.el));
+      if (at < 0) return;
+      await saveOps([{ type: 'move_item', item_id: d.id, to_tab_id: tab.id, position: at + (t.after ? 1 : 0) }]);
+    }
+    rerender();
+  } catch { /* toast shown */ }
+});
 
 window.addEventListener('hashchange', () => {
   state.filter = 'all';

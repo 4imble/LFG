@@ -43,29 +43,47 @@ export function sortItems(items, mode = 'manual') {
 }
 
 const COMMITTED = ['booked', 'done'];
-const addTo = (totals, price) => { totals[price.currency] = (totals[price.currency] || 0) + price.amount; };
 
-// Sums prices per currency: what is booked, and what is shortlisted on top.
-export function totals(items) {
+// A price is per person when it says so, or (for older items) when its note does.
+export const isPerPerson = (price) => (price?.per ? price.per === 'person' : /\b(per person|pp|p\.p\.|each|per head|per adult)\b/i.test(price?.note || ''));
+// What a price costs the whole group.
+export const groupAmount = (price, people = 1) => price.amount * (isPerPerson(price) ? Math.max(1, people) : 1);
+const addTo = (sums, price, people) => { sums[price.currency] = (sums[price.currency] || 0) + groupAmount(price, people); };
+
+// Sums prices per currency for `people` travellers: what is booked, and what
+// is shortlisted on top.
+export function totals(items, people = 1) {
   const out = { booked: {}, shortlisted: {} };
   for (const i of items) {
     if (!i.price) continue;
-    if (COMMITTED.includes(i.status)) addTo(out.booked, i.price);
-    else if (i.status === 'shortlisted') addTo(out.shortlisted, i.price);
+    if (COMMITTED.includes(i.status)) addTo(out.booked, i.price, people);
+    else if (i.status === 'shortlisted') addTo(out.shortlisted, i.price, people);
   }
   return out;
 }
 
 // The same sums broken down by item kind, biggest first. Kinds with no money are left out.
-export function spendByKind(items) {
+export function spendByKind(items, people = 1) {
   const kinds = new Map();
   for (const i of items) {
     if (!i.price || !(COMMITTED.includes(i.status) || i.status === 'shortlisted')) continue;
     if (!kinds.has(i.kind)) kinds.set(i.kind, { kind: i.kind, booked: {}, shortlisted: {} });
-    addTo(kinds.get(i.kind)[i.status === 'shortlisted' ? 'shortlisted' : 'booked'], i.price);
+    addTo(kinds.get(i.kind)[i.status === 'shortlisted' ? 'shortlisted' : 'booked'], i.price, people);
   }
-  const size = (k) => Object.values(k.booked).concat(Object.values(k.shortlisted)).reduce((a, b) => a + b, 0);
-  return [...kinds.values()].sort((a, b) => size(b) - size(a));
+  const size = (k) => Object.values(k.booked).concat(Object.values(k.shortlisted)).reduce((x, y) => x + y, 0);
+  return [...kinds.values()].sort((x, y) => size(y) - size(x));
+}
+
+// How the money in the budget's own currency compares with the budget.
+// Amounts in other currencies can't be converted, so they are listed apart.
+export function budgetUse(doc, sums) {
+  if (!doc.budget?.amount) return null;
+  const { amount, currency } = doc.budget;
+  const booked = sums.booked[currency] || 0;
+  const shortlisted = sums.shortlisted[currency] || 0;
+  const other = {};
+  for (const group of [sums.booked, sums.shortlisted]) for (const [c, a] of Object.entries(group)) if (c !== currency) other[c] = (other[c] || 0) + a;
+  return { amount, currency, booked, shortlisted, left: amount - booked - shortlisted, other };
 }
 
 export const fmtTotals = (t) => Object.entries(t).map(([currency, amount]) => money({ amount, currency })).join(' + ');
@@ -87,6 +105,85 @@ export function tripDay(doc, date) {
   const n = daysBetween(doc.start, date) + 1;
   if (n < 1 || (isFullDate(doc.end) && date > doc.end)) return null;
   return n;
+}
+
+// ---------- trip at a glance ----------
+const addDays = (date, n) => new Date(parseDate(date).getTime() + n * 864e5).toISOString().slice(0, 10);
+const live = (i) => i.status !== 'rejected';
+
+// Which nights of the trip have somewhere to stay. A stay from the 8th to the
+// 13th covers the nights of the 8th to the 12th. Gaps are runs of nights with
+// no stay at all (booked or not).
+export function stayCoverage(doc) {
+  if (!isFullDate(doc.start) || !isFullDate(doc.end) || doc.end <= doc.start) return null;
+  const nightsTotal = daysBetween(doc.start, doc.end);
+  if (nightsTotal > 800) return null;
+  const state = new Array(nightsTotal).fill(0); // 0 nothing, 1 a stay in mind, 2 booked
+  for (const i of allItems(doc)) {
+    if (i.kind !== 'stay' || !live(i) || !isFullDate(i.date) || !isFullDate(i.endDate) || i.endDate <= i.date) continue;
+    const from = Math.max(0, daysBetween(doc.start, i.date));
+    const to = Math.min(nightsTotal, daysBetween(doc.start, i.endDate));
+    const level = COMMITTED.includes(i.status) ? 2 : 1;
+    for (let n = from; n < to; n++) state[n] = Math.max(state[n], level);
+  }
+  const gaps = [];
+  for (let n = 0; n < nightsTotal; n++) {
+    if (state[n]) continue;
+    const last = gaps[gaps.length - 1];
+    if (last && last.index + last.nights === n) last.nights++;
+    else gaps.push({ index: n, from: addDays(doc.start, n), nights: 1 });
+  }
+  for (const g of gaps) { g.to = addDays(g.from, g.nights); delete g.index; }
+  return { nights: nightsTotal, covered: state.filter(Boolean).length, booked: state.filter((x) => x === 2).length, gaps };
+}
+
+// Lays the trip out as lanes of bars: where you are (places), where you sleep
+// (stays) and travel days. Positions are percentages of the trip's length.
+// Bars that overlap in a lane are pushed onto extra rows.
+export function tripStrip(doc) {
+  if (!isFullDate(doc.start) || !isFullDate(doc.end) || doc.end <= doc.start) return null;
+  const days = daysBetween(doc.start, doc.end) + 1;
+  if (days > 800) return null;
+  const pct = (n) => Math.round((n / days) * 10000) / 100;
+  const lanes = { place: [], stay: [], travel: [] };
+  for (const i of allItems(doc)) {
+    const lane = i.kind === 'place' ? 'place' : i.kind === 'stay' ? 'stay' : ['flight', 'transport'].includes(i.kind) ? 'travel' : null;
+    if (!lane || !live(i) || !isFullDate(i.date)) continue;
+    const end = isFullDate(i.endDate) && i.endDate > i.date ? i.endDate : i.date;
+    if (end < doc.start || i.date > doc.end) continue;
+    const from = Math.max(0, daysBetween(doc.start, i.date));
+    // A stay ends on the morning you leave; a place or a journey includes its last day.
+    const to = Math.min(days, daysBetween(doc.start, end) + (lane === 'stay' && end !== i.date ? 0 : 1));
+    lanes[lane].push({ id: i.id, title: i.title, status: i.status, country: i.country || '', date: i.date, endDate: end, from, to, left: pct(from), width: pct(Math.max(to - from, 0.6)), row: 0 });
+  }
+  for (const bars of Object.values(lanes)) {
+    bars.sort((a, b) => a.from - b.from || b.to - a.to);
+    const rowEnds = [];
+    for (const bar of bars) {
+      let row = rowEnds.findIndex((end) => end <= bar.from);
+      if (row < 0) row = rowEnds.length;
+      rowEnds[row] = Math.max(bar.to, bar.from + 1);
+      bar.row = row;
+    }
+  }
+  const months = [];
+  for (let d = parseDate(`${doc.start.slice(0, 7)}-01`); d <= parseDate(doc.end); d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+    const key = d.toISOString().slice(0, 10);
+    months.push({ key: key.slice(0, 7), left: pct(Math.max(0, daysBetween(doc.start, key))) });
+  }
+  const countries = [...new Set([...lanes.place, ...lanes.stay].sort((a, b) => a.from - b.from).map((b) => b.country).filter(Boolean))];
+  return { days, lanes, months, countries, rows: Object.fromEntries(Object.entries(lanes).map(([k, bars]) => [k, bars.reduce((n, b) => Math.max(n, b.row + 1), 0)])) };
+}
+
+// What needs attention soonest: overdue to-dos first, then the next dated things.
+export function nextUp(doc, today, limit = 5) {
+  const todoTabs = new Set(doc.tabs.filter((t) => t.layout === 'list').map((t) => t.id));
+  const dated = allItems(doc).filter((i) => live(i) && i.status !== 'done' && isFullDate(i.date));
+  const isTodo = (i) => i.kind === 'todo' || todoTabs.has(i.tabId);
+  const overdue = dated.filter((i) => isTodo(i) && i.date < today).map((i) => ({ ...i, overdue: true }));
+  const coming = dated.filter((i) => (i.endDate && isFullDate(i.endDate) ? i.endDate : i.date) >= today);
+  const byDate = (a, b) => a.date.localeCompare(b.date);
+  return [...overdue.sort(byDate), ...coming.sort(byDate)].slice(0, limit).map((i) => ({ ...i, inDays: daysBetween(today, i.date), todo: isTodo(i) }));
 }
 
 // ---------- calendar export ----------
@@ -118,7 +215,7 @@ export function toICS(doc, { now = new Date() } = {}) {
     const end = new Date(last.getTime() + 864e5); // DTEND is exclusive
     const notes = [
       i.subtitle, i.time && `Time: ${i.time}`, `Status: ${i.status}`,
-      i.price && `Price: ${money(i.price)}${i.price.note ? ` (${i.price.note})` : ''}`,
+      i.price && `Price: ${money(i.price)}${isPerPerson(i.price) ? ' per person' : ''}${i.price.note ? ` (${i.price.note})` : ''}`,
       ...Object.entries(i.details || {}).map(([k, v]) => `${k}: ${v}`),
       i.description, ...(i.links || []).map((l) => l.url),
     ].filter(Boolean).join('\n');

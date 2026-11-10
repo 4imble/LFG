@@ -1,7 +1,7 @@
 // Dialogs: viewing and editing items, tabs and plans, plus a few small prompts.
 
 import { esc, safeUrl, md, money, plural, ago } from './lib/format.js';
-import { allItems } from './lib/plan.js';
+import { allItems, isPerPerson } from './lib/plan.js';
 import { state, KINDS, STATUSES, LAYOUTS, icon, name, setName, toast, api, saveOps, undoToast, findItem, go, rerender, hooks, openModal, closeModal } from './core.js';
 import { statusPill, priceHtml, linksHtml, tagsHtml, detailsHtml } from './views.js';
 
@@ -107,8 +107,9 @@ export function itemEditor({ item = null, tabId, preset = {} }) {
         <div class="grid-3">
           <label class="field">Price <input type="number" step="0.01" min="0" inputmode="decimal" name="price" value="${esc(i.price?.amount ?? '')}"></label>
           <label class="field">Currency <input type="text" name="currency" value="${esc(i.price?.currency || usualCurrency())}" maxlength="3" list="dl-currencies" class="upper"></label>
-          <label class="field">Price note <input type="text" name="price_note" maxlength="200" value="${esc(i.price?.note)}" placeholder="per person"></label>
+          <label class="field">Price is <select name="price_per"><option value="total">for everyone</option><option value="person" ${i.price && isPerPerson(i.price) ? 'selected' : ''}>per person</option></select></label>
         </div>
+        <label class="field">Price note <input type="text" name="price_note" maxlength="200" value="${esc(i.price?.note)}" placeholder="return, per night, includes bags…"></label>
         <label class="field">Notes <textarea name="description" maxlength="8000" placeholder="Anything. **bold** and - bullets work.">${esc(i.description)}</textarea></label>
         <div class="field">Links <div id="links" class="rows">${(i.links?.length ? i.links : [{}]).map(linkRow).join('')}</div><button type="button" class="btn sm start" data-add="links">${icon('plus')}Link</button></div>
         <details class="more" ${hasExtras ? 'open' : ''}>
@@ -149,7 +150,7 @@ export function itemEditor({ item = null, tabId, preset = {} }) {
       const changes = {
         title: f.get('title').trim(), kind: f.get('kind'), status: f.get('status'), subtitle: f.get('subtitle'),
         date: keepMonth('date'), endDate: keepMonth('endDate'), time: f.get('time'), location: f.get('location').trim(), country: f.get('country').trim(),
-        price: priceStr ? { amount: Number(priceStr), currency: String(f.get('currency') || 'GBP').toUpperCase(), note: f.get('price_note') } : null,
+        price: priceStr ? { amount: Number(priceStr), currency: String(f.get('currency') || 'GBP').toUpperCase(), note: f.get('price_note'), per: f.get('price_per') } : null,
         description: f.get('description'), links, details,
         tags: String(f.get('tags')).split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean), image: f.get('image'),
       };
@@ -229,10 +230,17 @@ export function planEditor() {
           <label class="field">Starts <input type="date" name="start" value="${esc(d.start)}"></label>
           <label class="field">Ends <input type="date" name="end" value="${esc(d.end)}"></label>
         </div>
-        <label class="field">Who's going (comma separated) <input type="text" name="travellers" value="${esc((d.travellers || []).join(', '))}"></label>
+        <label class="field">Who's going (comma separated) <input type="text" name="travellers" value="${esc((d.travellers || []).join(', '))}">
+          <span class="hint-text">Per-person prices are multiplied by the number of people here.</span></label>
+        <div class="grid-2">
+          <label class="field">Budget for the whole trip <input type="number" name="budget" min="0" step="1" inputmode="decimal" value="${esc(d.budget?.amount ?? '')}" placeholder="14000"></label>
+          <label class="field">Budget currency <input type="text" name="budget_currency" maxlength="3" class="upper" value="${esc(d.budget?.currency || 'GBP')}"></label>
+        </div>
+        <label class="field">Cover photo address <input type="url" name="cover" value="${esc(d.cover)}" placeholder="https://… a wide photo works best">
+          <span class="hint-text">Shown behind the plan's title and on its card.</span></label>
         <label class="field">Summary <textarea name="summary" maxlength="8000" placeholder="The big picture">${esc(d.summary)}</textarea></label>
         <div class="error" id="plan-error" role="alert"></div>
-        ${state.admin ? `<div class="field danger-zone">${icon('lock')} Plan password
+        ${state.admin ? `<div class="field danger-zone"><span>${icon('lock')} Plan password</span>
           <div class="hint-text">${hasPassword ? 'This plan has its own password. Share the link and that password to give someone access to this plan only.' : 'No plan password yet, so only the admin password opens this plan. Set one to share it.'}</div>
           <div class="row-gap"><input type="text" id="plan-password" placeholder="${hasPassword ? 'New password' : 'Choose a password'}" autocomplete="off" class="grow" aria-label="Plan password">
           <button type="button" class="btn sm" data-set-password>${hasPassword ? 'Change' : 'Set'}</button>
@@ -247,10 +255,14 @@ export function planEditor() {
     const form = m.querySelector('form');
     form.onsubmit = async (e) => {
       e.preventDefault();
-      const { title, emoji, subtitle, start, end, summary, travellers } = Object.fromEntries(new FormData(form));
+      const { title, emoji, subtitle, start, end, summary, travellers, budget, budget_currency: currency, cover } = Object.fromEntries(new FormData(form));
       if (start && end && end < start) { m.querySelector('#plan-error').textContent = 'The end date is before the start date.'; return; }
       try {
-        await saveOps([{ type: 'set_plan_details', title, emoji, subtitle, start, end, summary, travellers: travellers.split(',').map((t) => t.trim()).filter(Boolean) }]);
+        await saveOps([{
+          type: 'set_plan_details', title, emoji, subtitle, start, end, summary, cover: cover.trim(),
+          budget: Number(budget) > 0 ? { amount: Number(budget), currency: (currency || 'GBP').toUpperCase() } : null,
+          travellers: travellers.split(',').map((t) => t.trim()).filter(Boolean),
+        }]);
         closeModal(); rerender();
       } catch { /* toast shown */ }
     };

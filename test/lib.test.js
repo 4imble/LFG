@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { md, esc, money, dateRange, shortRange, nights, ago, plural } from '../public/lib/format.js';
-import { searchItems, sortItems, totals, spendByKind, fmtTotals, tripPhase, tripDay, toICS } from '../public/lib/plan.js';
+import { searchItems, sortItems, totals, spendByKind, fmtTotals, tripPhase, tripDay, toICS, isPerPerson, budgetUse, stayCoverage, tripStrip, nextUp } from '../public/lib/plan.js';
 import { diffDocs } from '../public/lib/diff.js';
 import { emptyPlan, applyOp } from '../src/ops.js';
 
@@ -114,4 +114,69 @@ test('version diff describes what changed', () => {
   assert.match(lines, /Removed <strong>Via Singapore/);
   assert.deepEqual(diffDocs(doc, doc), ['<div class="muted">No visible changes</div>']);
   assert.deepEqual(diffDocs(null, doc), ['<div class="add">Plan created</div>']);
+});
+
+test('per-person prices count for everyone, and the budget compares like with like', () => {
+  const { doc } = samplePlan();
+  const { items } = doc.tabs[0];
+  assert.equal(isPerPerson({ amount: 1, per: 'person' }), true);
+  assert.equal(isPerPerson({ amount: 1, per: 'total', note: 'each' }), false, 'an explicit choice beats the note');
+  assert.equal(isPerPerson({ amount: 1, note: '£40 pp' }), true, 'older items are read from their note');
+  assert.equal(isPerPerson({ amount: 1, note: 'return' }), false);
+  applyOp(doc, { type: 'update_item', item_id: items[0].id, changes: { price: { amount: 585, currency: 'GBP', per: 'person' } } });
+  const sums = totals(doc.tabs[0].items, 2);
+  assert.deepEqual(sums, { booked: { GBP: 1170, JPY: 3800 }, shortlisted: { GBP: 610 } });
+  assert.equal(budgetUse(doc, sums), null);
+  applyOp(doc, { type: 'set_plan_details', budget: { amount: 2000, currency: 'gbp' } });
+  assert.deepEqual(budgetUse(doc, sums), { amount: 2000, currency: 'GBP', booked: 1170, shortlisted: 610, left: 220, other: { JPY: 3800 } });
+});
+
+test('stay coverage finds the nights with nowhere to sleep', () => {
+  const doc = emptyPlan();
+  applyOp(doc, { type: 'set_plan_details', start: '2027-02-01', end: '2027-02-11' });
+  assert.deepEqual(stayCoverage(doc), { nights: 10, covered: 0, booked: 0, gaps: [{ from: '2027-02-01', nights: 10, to: '2027-02-11' }] });
+  const add = (item) => applyOp(doc, { type: 'add_item', tab_id: doc.tabs[0].id, item: { kind: 'stay', ...item } });
+  add({ title: 'A', status: 'booked', date: '2027-02-01', endDate: '2027-02-04' });
+  add({ title: 'B', status: 'shortlisted', date: '2027-02-03', endDate: '2027-02-06' });
+  add({ title: 'Rejected', status: 'rejected', date: '2027-02-06', endDate: '2027-02-11' });
+  add({ title: 'Before the trip', status: 'booked', date: '2027-01-28', endDate: '2027-01-31' });
+  add({ title: 'Last night', status: 'booked', date: '2027-02-10', endDate: '2027-02-12' });
+  assert.deepEqual(stayCoverage(doc), { nights: 10, covered: 6, booked: 4, gaps: [{ from: '2027-02-06', nights: 4, to: '2027-02-10' }] });
+  assert.equal(stayCoverage(emptyPlan()), null);
+});
+
+test('the trip strip positions bars and stacks overlaps', () => {
+  const doc = emptyPlan();
+  applyOp(doc, { type: 'set_plan_details', start: '2027-02-01', end: '2027-02-10' });
+  const add = (item) => applyOp(doc, { type: 'add_item', tab_id: doc.tabs[0].id, item }).id;
+  const tokyo = add({ kind: 'place', title: 'Tokyo', date: '2027-02-01', endDate: '2027-02-05', country: 'Japan' });
+  const kyoto = add({ kind: 'place', title: 'Kyoto', date: '2027-02-04', endDate: '2027-02-08', country: 'Japan' });
+  const hanoi = add({ kind: 'place', title: 'Hanoi', date: '2027-02-09', country: 'Vietnam' });
+  add({ kind: 'flight', title: 'Flight', date: '2027-02-09' });
+  add({ kind: 'place', title: 'Month only', date: '2027-02' });
+  add({ kind: 'activity', title: 'Not a place', date: '2027-02-02' });
+  const strip = tripStrip(doc);
+  assert.equal(strip.days, 10);
+  const byId = Object.fromEntries(strip.lanes.place.map((b) => [b.id, b]));
+  assert.deepEqual([byId[tokyo].left, byId[tokyo].width, byId[tokyo].row], [0, 50, 0]);
+  assert.deepEqual([byId[kyoto].left, byId[kyoto].row], [30, 1], 'overlapping bars go on a second row');
+  assert.deepEqual([byId[hanoi].left, byId[hanoi].width, byId[hanoi].row], [80, 10, 0]);
+  assert.equal(strip.lanes.place.length, 3);
+  assert.equal(strip.lanes.travel.length, 1);
+  assert.deepEqual(strip.rows, { place: 2, stay: 0, travel: 1 });
+  assert.deepEqual(strip.countries, ['Japan', 'Vietnam']);
+  assert.deepEqual(strip.months, [{ key: '2027-02', left: 0 }]);
+  assert.equal(tripStrip(emptyPlan()), null);
+});
+
+test('next up lists overdue to-dos, then what is coming', () => {
+  const doc = emptyPlan();
+  const add = (item) => applyOp(doc, { type: 'add_item', tab_id: doc.tabs[0].id, item });
+  add({ kind: 'todo', title: 'Insurance', date: '2027-01-10' });
+  add({ kind: 'todo', title: 'Passports', date: '2026-12-01', status: 'done' });
+  add({ kind: 'flight', title: 'Fly', date: '2027-02-01' });
+  add({ kind: 'place', title: 'Old trip', date: '2026-06-01' });
+  add({ kind: 'stay', title: 'Staying now', date: '2027-01-18', endDate: '2027-01-25' });
+  const list = nextUp(doc, '2027-01-20');
+  assert.deepEqual(list.map((i) => [i.title, i.inDays, Boolean(i.overdue)]), [['Insurance', -10, true], ['Staying now', -2, false], ['Fly', 12, false]]);
 });

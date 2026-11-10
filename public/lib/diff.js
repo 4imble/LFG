@@ -12,6 +12,8 @@ export function diffDocs(prev, next) {
   for (const k of ['title', 'subtitle', 'emoji', 'start', 'end', 'summary']) {
     if ((prev[k] || '') !== (next[k] || '')) out.push(`<div class="chg">✎ Plan ${esc(k)} changed${k !== 'summary' ? `: ${code(prev[k])} → ${code(next[k])}` : ''}</div>`);
   }
+  if ((prev.cover || '') !== (next.cover || '')) out.push(`<div class="chg">✎ Cover photo ${next.cover ? (prev.cover ? 'changed' : 'added') : 'removed'}</div>`);
+  if (JSON.stringify(prev.budget || null) !== JSON.stringify(next.budget || null)) out.push(`<div class="chg">✎ Budget: ${code(money(prev.budget))} → ${code(money(next.budget))}</div>`);
   if ((prev.travellers || []).join('|') !== (next.travellers || []).join('|')) out.push(`<div class="chg">✎ Travellers: ${code((prev.travellers || []).join(', '))} → ${code((next.travellers || []).join(', '))}</div>`);
   const pt = new Map(prev.tabs.map((t) => [t.id, t]));
   const nt = new Map(next.tabs.map((t) => [t.id, t]));
