@@ -8,13 +8,13 @@ A shared, AI-assisted trip planner. Each trip is a **plan** (a sabbatical, a hol
 - **Fluid tabs** in five layouts: cards, table, timeline, checklist and notes. Tabs are created, renamed, merged and reordered as needed.
 - **Structured items**: flights, stays, places, activities, to-dos, costs and more, with dates, prices, links, tags and any extra details.
 - **Price history**: change a price and the old one is kept (shown as "↓ from £640").
-- **Overview**: booked and shortlisted totals, money by kind of item, status breakdown, open to-dos, countries, pinned items, and an itinerary across every tab with "Day 12" labels once the trip has dates.
+- **Overview**: booked totals and what is confirmed or shortlisted but not booked yet, money by kind of item, status breakdown, open to-dos, countries, pinned items, and an itinerary across every tab with "Day 12" labels once the trip has dates.
 - **Trip at a glance**: once the plan has dates, a strip shows where you are across the whole trip, coloured by country, with stays and travel days underneath and a list of the nights that have nowhere to stay yet. Booked things are solid, the rest are hatched.
-- **Budget**: set a budget for the trip and the overview shows what is booked, what the shortlist would add and what is left. Mark a price as per person and it is counted for everyone going.
+- **Budget**: set a budget for the trip and the overview shows what is booked, what confirmed and shortlisted things would add and what is left. Mark a price as per person and it is counted for everyone going.
 - **Cover photo**: give a plan a photo and it sits behind the title and on the plan's card.
 - **Drag and drop** (with a mouse): drag an item to reorder it or onto a tab to move it, and drag tabs to reorder them.
 - **Finding things**: search the whole plan (press `/`), click a tag or country to filter by it, and sort any tab by date, price, name or latest change.
-- **Quick edits**: a quick-add box on every tab, a status menu on every item, duplicate, and Undo after deleting, moving or an assistant change.
+- **Quick edits**: a quick-add box on every tab, a status menu on every item (idea, considering, shortlisted, confirmed, booked, done, rejected), duplicate, and Undo after deleting, moving or an assistant change.
 - **Take it with you**: download the dated items as a calendar file (.ics), export a JSON backup, or print. It can be added to a phone's home screen.
 - **Assistant** (Claude): paste a brain dump or ask for changes ("the Tokyo flight is now £540", "tidy the inbox into tabs") and it edits the plan through the same validated operations as the UI. It can search the web when you ask it to look something up, and shows what it is doing while it works.
 - **History**: every change (manual, assistant or restore) is a version showing who made it and what changed. You can preview any old version and restore it.

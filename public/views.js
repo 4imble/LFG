@@ -398,7 +398,7 @@ function glance(doc) {
   }
   const ROW = 30;
   const colour = (c) => (c ? `c${strip.countries.indexOf(c) % 6}` : 'c-none');
-  const firm = (s) => s === 'booked' || s === 'done';
+  const firm = (s) => s === 'confirmed' || s === 'booked' || s === 'done';
   const grid = strip.months.map((m) => `<i class="g-line" style="left:${m.left}%"></i>`).join('');
   const today = todayStr();
   const todayAt = today >= doc.start && today <= doc.end ? `<i class="g-today" style="left:${(daysBetween(doc.start, today) / strip.days) * 100}%" title="Today"></i>` : '';
@@ -432,15 +432,16 @@ function overview(doc) {
   const live = items.filter((i) => i.status !== 'rejected');
   const booked = byStatus.booked + byStatus.done;
   const deciding = byStatus.considering + byStatus.shortlisted;
+  const toBook = byStatus.confirmed;
   const sums = totals(items, people);
   const byKind = spendByKind(items, people);
   const budget = budgetUse(doc, sums);
   const cov = stayCoverage(doc);
-  const multiplied = people > 1 && items.some((i) => i.price && isPerPerson(i.price) && ['booked', 'done', 'shortlisted'].includes(i.status));
+  const multiplied = people > 1 && items.some((i) => i.price && isPerPerson(i.price) && ['booked', 'done', 'confirmed', 'shortlisted'].includes(i.status));
   const countries = {};
   for (const i of live) if (i.country) countries[i.country] = (countries[i.country] || 0) + 1;
   const pinned = items.filter((i) => i.pinned);
-  const dated = live.filter((i) => i.date && ['booked', 'shortlisted', 'done'].includes(i.status));
+  const dated = live.filter((i) => i.date && ['booked', 'confirmed', 'shortlisted', 'done'].includes(i.status));
   const todoTabs = new Set(doc.tabs.filter((t) => t.layout === 'list').map((t) => t.id));
   const todos = live.filter((i) => i.kind === 'todo' || todoTabs.has(i.tabId));
   const openTodos = sortItems(todos.filter((i) => i.status !== 'done').map((i) => ({ ...i, pinned: false })), 'date');
@@ -451,16 +452,16 @@ function overview(doc) {
 
   const stat = (n, label, sub = '', extra = '') => `<div class="stat"><div class="n">${n}</div><div class="l">${label}</div>${extra}${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
   const stats = [
-    stat(`${booked}<small> of ${live.length}</small>`, 'Booked', deciding ? `${deciding} still to decide` : live.length - booked ? `${plural(live.length - booked, 'idea')} to firm up` : 'Everything is booked'),
+    stat(`${booked}<small> of ${live.length}</small>`, 'Booked', [deciding && `${deciding} still to decide`, toBook && `${toBook} confirmed, to book`].filter(Boolean).join(' · ') || (live.length - booked ? `${plural(live.length - booked, 'idea')} to firm up` : 'Everything is booked')),
     cov
       ? stat(`${cov.covered}<small> of ${cov.nights}</small>`, 'Nights with a stay', cov.booked === cov.covered ? (cov.covered ? 'All of those are booked' : 'Add stays with dates') : `${cov.booked} booked, ${cov.covered - cov.booked} in mind`, `<div class="bar two"><span style="width:${(cov.booked / cov.nights) * 100}%"></span><span class="soft" style="width:${((cov.covered - cov.booked) / cov.nights) * 100}%"></span></div>`)
       : stat(live.length, 'Things in the plan', 'Set the trip dates to see nights covered'),
     budget
       ? stat(`<span class="money-n">${esc(cash(budget.booked, budget.currency))}</span><small> of ${esc(cash(budget.amount, budget.currency))}</small>`, 'Budget booked',
-        budget.left >= 0 ? `${esc(cash(budget.left, budget.currency))} left if you book the shortlist` : `<span class="over">${esc(cash(-budget.left, budget.currency))} over if you book the shortlist</span>`,
+        budget.left >= 0 ? `${esc(cash(budget.left, budget.currency))} left if you book the rest` : `<span class="over">${esc(cash(-budget.left, budget.currency))} over if you book the rest</span>`,
         `<div class="bar two ${budget.left < 0 ? 'over' : ''}"><span style="width:${Math.min(100, (budget.booked / budget.amount) * 100)}%"></span><span class="soft" style="width:${Math.max(0, Math.min(100 - (budget.booked / budget.amount) * 100, (budget.shortlisted / budget.amount) * 100))}%"></span></div>`)
       : stat(`<span class="money-n">${esc(fmtTotals(sums.booked) || '—')}</span>`, 'Spent or booked', 'Set a budget in Edit details to track it'),
-    stat(`<span class="money-n">${esc(fmtTotals(sums.shortlisted) || '—')}</span>`, 'Shortlisted, not booked', budget && Object.keys(budget.other).length ? `Not in the budget sum: ${esc(fmtTotals(budget.other))}` : ''),
+    stat(`<span class="money-n">${esc(fmtTotals(sums.shortlisted) || '—')}</span>`, 'Confirmed or shortlisted, not booked', budget && Object.keys(budget.other).length ? `Not in the budget sum: ${esc(fmtTotals(budget.other))}` : ''),
   ].join('');
 
   const side = [
@@ -475,7 +476,7 @@ function overview(doc) {
       <div class="legend">${STATUSES.filter((s) => byStatus[s]).map((s) => `<button type="button" data-action="search-for" data-q="${s}"><i class="${s}"></i>${cap(s)} <b>${byStatus[s]}</b></button>`).join('')}</div>`),
     byKind.length ? panel('Money', `
       <table class="money">
-        <thead><tr><th></th><th>Booked</th><th>Shortlisted</th></tr></thead>
+        <thead><tr><th></th><th>Booked</th><th>Not booked yet</th></tr></thead>
         <tbody>${byKind.map((k) => `<tr><td>${kindIcon(k.kind)} ${esc(cap(k.kind))}</td><td>${esc(fmtTotals(k.booked) || '—')}</td><td class="muted">${esc(fmtTotals(k.shortlisted) || '—')}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td>Total</td><td>${esc(fmtTotals(sums.booked) || '—')}</td><td class="muted">${esc(fmtTotals(sums.shortlisted) || '—')}</td></tr></tfoot>
       </table>
@@ -494,7 +495,7 @@ function overview(doc) {
       <div class="ov-grid">${stats}</div>
       ${glance(doc)}
       ${pinned.length ? `<h2 class="section-title">Pinned</h2>${cardsLayout(pinned, { showTab: true })}` : ''}
-      ${dated.length ? `<h2 class="section-title">Itinerary so far</h2><p class="small muted section-note">Shortlisted and booked things with dates, across every tab.</p>${timelineLayout(dated, { showTab: true })}` : ''}
+      ${dated.length ? `<h2 class="section-title">Itinerary so far</h2><p class="small muted section-note">Shortlisted, confirmed and booked things with dates, across every tab.</p>${timelineLayout(dated, { showTab: true })}` : ''}
     </div>
     <aside class="ov-side">${side}</aside>
   </div>`;

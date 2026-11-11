@@ -11,7 +11,7 @@ export const KINDS = {
   flight: '✈️', transport: '🚆', stay: '🏨', place: '📍', activity: '🎟️', food: '🍜', event: '🎉',
   idea: '💡', note: '📝', todo: '✅', cost: '💷', document: '📄', contact: '👤', other: '✨',
 };
-export const STATUSES = ['idea', 'considering', 'shortlisted', 'booked', 'done', 'rejected'];
+export const STATUSES = ['idea', 'considering', 'shortlisted', 'confirmed', 'booked', 'done', 'rejected'];
 export const LAYOUTS = { cards: 'Cards', table: 'Table', timeline: 'Timeline', list: 'Checklist', notes: 'Notes' };
 
 export const state = {

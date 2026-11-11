@@ -30,6 +30,7 @@
   --st-idea: #6f7678; --st-idea-bg: #ecebe6;
   --st-considering: #8f6300; --st-considering-bg: #fbefc9;
   --st-shortlisted: #2757a0; --st-shortlisted-bg: #dde8f8;
+  --st-confirmed: #0f6f79; --st-confirmed-bg: #d3eef0;
   --st-booked: #17703f; --st-booked-bg: #d5f0e0;
   --st-done: #47575a; --st-done-bg: #e2e7e6;
   --st-rejected: #a03f37; --st-rejected-bg: #f6dedb;
@@ -58,7 +59,7 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -8px rgba(0, 0, 0, .45);
   --shadow-lg: 0 24px 64px -12px rgba(0, 0, 0, .7);
   --st-idea: #aab3b3; --st-idea-bg: #2a3435; --st-considering: #f0c75e; --st-considering-bg: #3a3218;
-  --st-shortlisted: #8fb6f0; --st-shortlisted-bg: #1d2c44; --st-booked: #6fd49c; --st-booked-bg: #183526;
+  --st-shortlisted: #8fb6f0; --st-shortlisted-bg: #1d2c44; --st-confirmed: #6cd0d8; --st-confirmed-bg: #163538; --st-booked: #6fd49c; --st-booked-bg: #183526;
   --st-done: #b9c5c2; --st-done-bg: #283335; --st-rejected: #f0958c; --st-rejected-bg: #3e2422;
   --k-travel: #7fb1ea; --k-stay: #b59be6; --k-place: #6fcb9a; --k-fun: #f2a15f;
   --k-food: #ee8f9c; --k-admin: #5cc0b5; --k-money: #e3bd55; --k-note: #a3adad;
@@ -324,6 +325,7 @@ button.status:hover { filter: brightness(.95); box-shadow: 0 0 0 2px color-mix(i
 .status.idea { color: var(--st-idea); background: var(--st-idea-bg); }
 .status.considering { color: var(--st-considering); background: var(--st-considering-bg); }
 .status.shortlisted { color: var(--st-shortlisted); background: var(--st-shortlisted-bg); }
+.status.confirmed { color: var(--st-confirmed); background: var(--st-confirmed-bg); }
 .status.booked { color: var(--st-booked); background: var(--st-booked-bg); }
 .status.done { color: var(--st-done); background: var(--st-done-bg); }
 .status.rejected { color: var(--st-rejected); background: var(--st-rejected-bg); }
@@ -406,6 +408,7 @@ th.num, td.num { text-align: right; }
 .status-bar .idea, .legend .idea { background: var(--st-idea); }
 .status-bar .considering, .legend .considering { background: var(--st-considering); }
 .status-bar .shortlisted, .legend .shortlisted { background: var(--st-shortlisted); }
+.status-bar .confirmed, .legend .confirmed { background: var(--st-confirmed); }
 .status-bar .booked, .legend .booked { background: var(--st-booked); }
 .status-bar .done, .legend .done { background: var(--st-done); }
 .status-bar .rejected, .legend .rejected { background: var(--st-rejected); }
