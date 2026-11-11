@@ -43,6 +43,9 @@ export function sortItems(items, mode = 'manual') {
 }
 
 const COMMITTED = ['booked', 'done'];
+// Decided on or in the running, but not paid for yet. Their money is counted
+// apart from what is booked ("shortlisted" in the sums below).
+const PENDING = ['shortlisted', 'confirmed'];
 
 // A price is per person when it says so, or (for older items) when its note does.
 export const isPerPerson = (price) => (price?.per ? price.per === 'person' : /\b(per person|pp|p\.p\.|each|per head|per adult)\b/i.test(price?.note || ''));
@@ -51,13 +54,13 @@ export const groupAmount = (price, people = 1) => price.amount * (isPerPerson(pr
 const addTo = (sums, price, people) => { sums[price.currency] = (sums[price.currency] || 0) + groupAmount(price, people); };
 
 // Sums prices per currency for `people` travellers: what is booked, and what
-// is shortlisted on top.
+// is confirmed or shortlisted on top.
 export function totals(items, people = 1) {
   const out = { booked: {}, shortlisted: {} };
   for (const i of items) {
     if (!i.price) continue;
     if (COMMITTED.includes(i.status)) addTo(out.booked, i.price, people);
-    else if (i.status === 'shortlisted') addTo(out.shortlisted, i.price, people);
+    else if (PENDING.includes(i.status)) addTo(out.shortlisted, i.price, people);
   }
   return out;
 }
@@ -66,9 +69,9 @@ export function totals(items, people = 1) {
 export function spendByKind(items, people = 1) {
   const kinds = new Map();
   for (const i of items) {
-    if (!i.price || !(COMMITTED.includes(i.status) || i.status === 'shortlisted')) continue;
+    if (!i.price || !(COMMITTED.includes(i.status) || PENDING.includes(i.status))) continue;
     if (!kinds.has(i.kind)) kinds.set(i.kind, { kind: i.kind, booked: {}, shortlisted: {} });
-    addTo(kinds.get(i.kind)[i.status === 'shortlisted' ? 'shortlisted' : 'booked'], i.price, people);
+    addTo(kinds.get(i.kind)[PENDING.includes(i.status) ? 'shortlisted' : 'booked'], i.price, people);
   }
   const size = (k) => Object.values(k.booked).concat(Object.values(k.shortlisted)).reduce((x, y) => x + y, 0);
   return [...kinds.values()].sort((x, y) => size(y) - size(x));
@@ -225,7 +228,7 @@ export function toICS(doc, { now = new Date() } = {}) {
       `SUMMARY:${icsText(i.title)}`,
       ...([i.location, i.country].some(Boolean) ? [`LOCATION:${icsText([i.location, i.country].filter(Boolean).join(', '))}`] : []),
       `DESCRIPTION:${icsText(notes)}`,
-      `STATUS:${['booked', 'done'].includes(i.status) ? 'CONFIRMED' : 'TENTATIVE'}`,
+      `STATUS:${['confirmed', 'booked', 'done'].includes(i.status) ? 'CONFIRMED' : 'TENTATIVE'}`,
       'TRANSP:TRANSPARENT', 'END:VEVENT',
     );
   }

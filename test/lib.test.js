@@ -180,3 +180,14 @@ test('next up lists overdue to-dos, then what is coming', () => {
   const list = nextUp(doc, '2027-01-20');
   assert.deepEqual(list.map((i) => [i.title, i.inDays, Boolean(i.overdue)]), [['Insurance', -10, true], ['Staying now', -2, false], ['Fly', 12, false]]);
 });
+
+test('"confirmed" items are decided but not booked: counted with the shortlist, firm on the calendar', () => {
+  const { doc } = samplePlan();
+  const tab = doc.tabs[0].id;
+  applyOp(doc, { type: 'add_item', tab_id: tab, item: { kind: 'activity', title: 'Therme', status: 'confirmed', date: '2027-01-20', price: { amount: 40, currency: 'GBP', per: 'person' } } });
+  const items = doc.tabs.flatMap((t) => t.items);
+  assert.deepEqual(totals(items, 2), { booked: { GBP: 585, JPY: 3800 }, shortlisted: { GBP: 690 } });
+  assert.deepEqual(spendByKind(items, 2).find((k) => k.kind === 'activity'), { kind: 'activity', booked: { JPY: 3800 }, shortlisted: { GBP: 80 } });
+  const ics = toICS(doc, { now: new Date('2027-01-01T10:00:00Z') });
+  assert.match(ics, /SUMMARY:Therme\r\n(?:.*\r\n)*?STATUS:CONFIRMED/);
+});

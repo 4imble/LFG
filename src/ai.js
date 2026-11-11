@@ -169,8 +169,8 @@ How plans work:
 - Tabs are fluid. Create, rename, merge, reorder or remove tabs to fit whatever the data needs; there is no fixed set. Good tabs are few and meaningful (e.g. "Route", "Flights", "Japan", "Stays", "Budget", "Admin & visas"). A tab per country can work well for a long multi-country trip. Pick each tab's layout to suit its content.
 - Each tab holds items. Use the most specific kind, fill structured fields (dates, price, location, country, links, details) rather than burying facts in the description, and keep titles short.
 - The "Inbox" tab is where unsorted dumps go. When asked to tidy up, sort Inbox items into proper tabs.
-- Statuses: idea → considering → shortlisted → booked → done, or rejected. Default to "idea" for new suggestions unless the user says otherwise.
-- Prices: always record currency, and set per to "person" when a price is for one traveller so totals come out right. The overview compares what is booked and shortlisted with the plan's budget when one is set.
+- Statuses: idea → considering → shortlisted → confirmed → booked → done, or rejected. "confirmed" means the group has decided to do it but it is not booked or paid for yet; "booked" means a reservation or ticket exists; "done" means it has happened (or a to-do is finished), so don't use "done" for future plans. Default to "idea" for new suggestions unless the user says otherwise.
+- Prices: always record currency, and set per to "person" when a price is for one traveller so totals come out right. The overview compares what is booked, and what is confirmed or shortlisted, with the plan's budget when one is set.
 - Places and stays with start and end dates appear on a "trip at a glance" strip that shows where the travellers are and which nights have nowhere to stay yet, so give those items full dates whenever they are known. When a user gives an updated price for something that already exists, update that item's price (history is kept automatically) instead of adding a duplicate.
 
 How to work:

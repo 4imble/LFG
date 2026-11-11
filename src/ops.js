@@ -8,7 +8,7 @@ export const ITEM_KINDS = [
   'flight', 'transport', 'stay', 'place', 'activity', 'food', 'event',
   'idea', 'note', 'todo', 'cost', 'document', 'contact', 'other',
 ];
-export const STATUSES = ['idea', 'considering', 'shortlisted', 'booked', 'done', 'rejected'];
+export const STATUSES = ['idea', 'considering', 'shortlisted', 'confirmed', 'booked', 'done', 'rejected'];
 export const LAYOUTS = ['cards', 'table', 'timeline', 'list', 'notes'];
 export const PRICE_PER = ['total', 'person'];
 
